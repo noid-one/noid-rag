@@ -81,21 +81,21 @@ def print_answer_result(result: Any) -> None:
     if not isinstance(result, AnswerResult):
         return
 
-    console.print(Panel(
-        result.answer,
-        title="[bold green]Answer[/bold green]",
-        subtitle=f"Model: {result.model}",
-        border_style="green",
-    ))
-
     if result.sources:
-        console.print("\n[bold]Sources:[/bold]")
+        console.print("[bold]Sources:[/bold]")
         for i, r in enumerate(result.sources):
             console.print(Panel(
                 r.text,
                 title=f"[bold]#{i+1}[/bold] Score: {r.score:.4f}",
                 subtitle=f"Chunk: {r.chunk_id} | Doc: {r.document_id}",
             ))
+
+    console.print(Panel(
+        result.answer,
+        title="[bold green]Answer[/bold green]",
+        subtitle=f"Model: {result.model}",
+        border_style="green",
+    ))
 
 
 def print_stats(stats: dict[str, Any]) -> None:
