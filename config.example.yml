@@ -87,6 +87,23 @@ vectorstore:
   # 5–10 is fine for personal use. Increase for heavy concurrent workloads.
   pool_size: 20
 
+  # PostgreSQL full-text search language configuration.
+  # Controls how text is tokenized and stemmed for keyword search.
+  # Common values: "english", "spanish", "french", "german", "simple" (no stemming).
+  # Full list: https://www.postgresql.org/docs/current/textsearch-dictionaries.html
+  fts_language: english
+
+search:
+  # How many chunks to retrieve per search query.
+  # Higher = more context for the LLM, but may include less relevant results.
+  # Lower  = more focused results, but may miss relevant information.
+  top_k: 5
+
+  # Reciprocal Rank Fusion constant used when merging vector and keyword
+  # search results. Higher values give more weight to lower-ranked results.
+  # Typical range: 1–100. Default (60) works well for most use cases.
+  rrf_k: 60
+
 llm:
   # The endpoint URL for the chat completions API (OpenAI-compatible).
   api_url: https://openrouter.ai/api/v1/chat/completions
@@ -101,6 +118,19 @@ llm:
   # 1024 ≈ ~750 words. Increase if you need longer answers.
   # This does NOT affect input — only the length of the response.
   max_tokens: 1024
+
+  # Controls randomness of LLM output (0.0 = deterministic, 2.0 = very creative).
+  # For RAG, 0.0 is recommended — you want factual answers, not creative ones.
+  temperature: 0.0
+
+  # System prompt sent to the LLM before each question.
+  # Customize to change the assistant's behavior, tone, or constraints.
+  # system_prompt: "You are a helpful assistant. Answer based ONLY on the provided context."
+
+generate:
+  # Maximum tokens for each LLM call when generating Q&A pairs.
+  # Higher values allow more questions per chunk but cost more.
+  max_tokens: 2048
 
 batch:
   # How many times to retry a failed operation (e.g., API timeout).

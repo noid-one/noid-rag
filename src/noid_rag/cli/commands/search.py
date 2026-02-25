@@ -16,7 +16,7 @@ from noid_rag.cli.display import (
 @app.command()
 def search(
     query: str = typer.Argument(..., help="Search query text"),
-    top_k: int = typer.Option(5, "--top-k", "-k", help="Number of results"),
+    top_k: int | None = typer.Option(None, "--top-k", "-k", help="Number of results"),
     answer: bool = typer.Option(True, "--answer/--no-answer", help="Synthesize an answer via LLM"),
     output: str | None = typer.Option(None, "--output", "-o", help="Export results to file"),
 ):

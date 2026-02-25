@@ -41,6 +41,7 @@ class VectorStoreConfig(BaseModel):
     pool_size: int = 20
     hnsw_m: int = 16
     hnsw_ef_construction: int = 64
+    fts_language: str = "english"
 
     @field_validator("table_name")
     @classmethod
@@ -54,11 +55,22 @@ class VectorStoreConfig(BaseModel):
         return v
 
 
+class SearchConfig(BaseModel):
+    top_k: int = Field(default=5, gt=0)
+    rrf_k: int = Field(default=60, gt=0)
+
+
 class LLMConfig(BaseModel):
     api_url: str = "https://openrouter.ai/api/v1/chat/completions"
     api_key: SecretStr = SecretStr("")
     model: str = "openai/gpt-4o-mini"
     max_tokens: int = 1024
+    temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+    system_prompt: str = (
+        "You are a helpful assistant. Answer the user's question based ONLY on the "
+        "provided context. If the context doesn't contain enough information to answer, "
+        "say so clearly. Be concise and direct."
+    )
 
 
 class BatchConfig(BaseModel):
@@ -74,6 +86,7 @@ class GenerateConfig(BaseModel):
     num_questions: int = 20
     questions_per_chunk: int = 3
     strategy: Literal["random", "diverse"] = "diverse"
+    max_tokens: int = 2048
 
 
 class EvalConfig(BaseModel):
@@ -82,6 +95,8 @@ class EvalConfig(BaseModel):
     save_results: bool = True
     results_dir: str = "~/.noid-rag/eval"
     promptfoo_threshold: float = 0.7
+    judge_max_tokens: int = Field(default=16, gt=0)
+    judge_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
 
 
 def _load_yaml_config(path: Path | None = None) -> dict[str, Any]:
@@ -107,6 +122,7 @@ class Settings(BaseSettings):
     chunker: ChunkerConfig = Field(default_factory=ChunkerConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     vectorstore: VectorStoreConfig = Field(default_factory=VectorStoreConfig)
+    search: SearchConfig = Field(default_factory=SearchConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     batch: BatchConfig = Field(default_factory=BatchConfig)
     generate: GenerateConfig = Field(default_factory=GenerateConfig)

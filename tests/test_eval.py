@@ -21,15 +21,23 @@ from noid_rag.models import (
 # Dataset loading
 # ---------------------------------------------------------------------------
 
+
 class TestLoadDataset:
     def test_load_yaml(self, tmp_path):
         dataset = tmp_path / "data.yml"
-        dataset.write_text(yaml.dump({
-            "questions": [
-                {"question": "What is RAG?", "ground_truth": "Retrieval Augmented Generation"},
-                {"question": "How does search work?"},
-            ]
-        }))
+        dataset.write_text(
+            yaml.dump(
+                {
+                    "questions": [
+                        {
+                            "question": "What is RAG?",
+                            "ground_truth": "Retrieval Augmented Generation",
+                        },
+                        {"question": "How does search work?"},
+                    ]
+                }
+            )
+        )
 
         from noid_rag.eval import load_dataset
 
@@ -41,11 +49,15 @@ class TestLoadDataset:
 
     def test_load_json(self, tmp_path):
         dataset = tmp_path / "data.json"
-        dataset.write_text(json.dumps({
-            "questions": [
-                {"question": "Q1", "ground_truth": "A1"},
-            ]
-        }))
+        dataset.write_text(
+            json.dumps(
+                {
+                    "questions": [
+                        {"question": "Q1", "ground_truth": "A1"},
+                    ]
+                }
+            )
+        )
 
         from noid_rag.eval import load_dataset
 
@@ -102,6 +114,7 @@ class TestLoadDataset:
 # Mean score computation
 # ---------------------------------------------------------------------------
 
+
 class TestComputeMeanScores:
     def test_mean_scores(self):
         from noid_rag.eval import _compute_mean_scores
@@ -124,31 +137,41 @@ class TestComputeMeanScores:
 # Orchestration (run_evaluation)
 # ---------------------------------------------------------------------------
 
+
 class TestRunEvaluation:
     @pytest.fixture
     def dataset_file(self, tmp_path):
         dataset = tmp_path / "data.yml"
-        dataset.write_text(yaml.dump({
-            "questions": [
-                {"question": "What is X?", "ground_truth": "X is Y."},
-                {"question": "How does Z work?"},
-            ]
-        }))
+        dataset.write_text(
+            yaml.dump(
+                {
+                    "questions": [
+                        {"question": "What is X?", "ground_truth": "X is Y."},
+                        {"question": "How does Z work?"},
+                    ]
+                }
+            )
+        )
         return dataset
 
     @pytest.fixture
     def mock_rag(self):
         rag = MagicMock()
-        rag.aanswer = AsyncMock(return_value=AnswerResult(
-            answer="Test answer",
-            sources=[
-                SearchResult(
-                    chunk_id="chk_1", text="context text",
-                    score=0.9, metadata={}, document_id="doc_1",
-                ),
-            ],
-            model="test-model",
-        ))
+        rag.aanswer = AsyncMock(
+            return_value=AnswerResult(
+                answer="Test answer",
+                sources=[
+                    SearchResult(
+                        chunk_id="chk_1",
+                        text="context text",
+                        score=0.9,
+                        metadata={},
+                        document_id="doc_1",
+                    ),
+                ],
+                model="test-model",
+            )
+        )
         return rag
 
     @pytest.fixture
@@ -166,20 +189,35 @@ class TestRunEvaluation:
         self, dataset_file, mock_rag, eval_config, mock_settings
     ):
         mock_results = [
-            EvalResult("What is X?", "Test answer", ["context text"], "X is Y.",
-                        scores={"faithfulness": 0.9}),
-            EvalResult("How does Z work?", "Test answer", ["context text"], None,
-                        scores={"faithfulness": 0.7}),
+            EvalResult(
+                "What is X?",
+                "Test answer",
+                ["context text"],
+                "X is Y.",
+                scores={"faithfulness": 0.9},
+            ),
+            EvalResult(
+                "How does Z work?",
+                "Test answer",
+                ["context text"],
+                None,
+                scores={"faithfulness": 0.7},
+            ),
         ]
 
         with patch(
             "noid_rag.eval_backends.ragas_backend.run_ragas",
-            new_callable=AsyncMock, return_value=mock_results,
+            new_callable=AsyncMock,
+            return_value=mock_results,
         ):
             from noid_rag.eval import run_evaluation
 
             summary = await run_evaluation(
-                dataset_file, eval_config, mock_settings, mock_rag, top_k=3,
+                dataset_file,
+                eval_config,
+                mock_settings,
+                mock_rag,
+                top_k=3,
             )
 
         assert mock_rag.aanswer.call_count == 2
@@ -199,42 +237,61 @@ class TestRunEvaluation:
 # RAGAS backend
 # ---------------------------------------------------------------------------
 
+
 class TestRagasBackend:
-    async def test_ragas_import_error(self):
+    def test_build_eval_script(self):
+        from noid_rag.eval_backends.ragas_backend import _ENV_API_KEY, _build_eval_script
+
+        script = _build_eval_script(
+            data_path="/tmp/data.json",
+            output_path="/tmp/results.json",
+            metrics=["faithfulness", "answer_relevancy"],
+            api_url="https://api.example.com/v1",
+            model="test-model",
+        )
+        assert "NumericMetric" in script
+        assert "faithfulness" in script
+        assert "answer_relevancy" in script
+        assert "test-model" in script
+        # API key must NOT appear as a literal — only the env-var name should appear
+        assert "test-key" not in script
+        assert _ENV_API_KEY in script
+        # Should be valid Python
+        compile(script, "<eval_script>", "exec")
+
+    def test_parse_ragas_results(self, tmp_path):
+        from noid_rag.eval_backends.ragas_backend import _parse_ragas_results
+
+        output = tmp_path / "results.json"
+        output.write_text(
+            json.dumps(
+                [
+                    {"faithfulness": 0.85, "answer_relevancy": 0.9},
+                ]
+            )
+        )
+
+        results = _parse_ragas_results(output, ["q1"], ["a1"], [["c1"]], ["gt1"])
+        assert len(results) == 1
+        assert results[0].scores["faithfulness"] == pytest.approx(0.85)
+        assert results[0].scores["answer_relevancy"] == pytest.approx(0.9)
+        assert results[0].question == "q1"
+
+    async def test_missing_api_key_raises(self):
         from noid_rag.eval_backends.ragas_backend import run_ragas
 
         llm_config = MagicMock()
+        llm_config.api_key.get_secret_value.return_value = ""
         eval_config = EvalConfig(metrics=["faithfulness"])
 
-        with patch.dict("sys.modules", {"ragas": None, "ragas.metrics": None}):
-            with pytest.raises(RuntimeError, match="ragas is not installed"):
-                await run_ragas(["q"], ["a"], [["c"]], [None], eval_config, llm_config)
-
-    def test_parse_ragas_results(self):
-        import pandas as pd
-
-        from noid_rag.eval_backends.ragas_backend import _parse_ragas_results
-
-        mock_result = MagicMock()
-        mock_result.to_pandas.return_value = pd.DataFrame({
-            "user_input": ["q1"],
-            "response": ["a1"],
-            "retrieved_contexts": [["c1"]],
-            "reference": ["gt1"],
-            "faithfulness": [0.85],
-        })
-
-        results = _parse_ragas_results(
-            mock_result, ["q1"], ["a1"], [["c1"]], ["gt1"]
-        )
-        assert len(results) == 1
-        assert results[0].scores["faithfulness"] == pytest.approx(0.85)
-        assert results[0].question == "q1"
+        with pytest.raises(RuntimeError, match="API key"):
+            await run_ragas(["q"], ["a"], [["c"]], [None], eval_config, llm_config)
 
 
 # ---------------------------------------------------------------------------
 # Promptfoo backend
 # ---------------------------------------------------------------------------
+
 
 class TestPromptfooBackend:
     def test_build_assertions(self):
@@ -250,21 +307,34 @@ class TestPromptfooBackend:
         from noid_rag.eval_backends.promptfoo_backend import _parse_promptfoo_results
 
         output = tmp_path / "results.json"
-        output.write_text(json.dumps({
-            "results": [{
-                "gradingResult": {
-                    "componentResults": [{
-                        "assertion": {"type": "context-faithfulness"},
-                        "score": 0.8,
-                        "pass": True,
-                    }]
+        output.write_text(
+            json.dumps(
+                {
+                    "results": [
+                        {
+                            "gradingResult": {
+                                "componentResults": [
+                                    {
+                                        "assertion": {"type": "context-faithfulness"},
+                                        "score": 0.8,
+                                        "pass": True,
+                                    }
+                                ]
+                            }
+                        }
+                    ]
                 }
-            }]
-        }))
+            )
+        )
 
         results = _parse_promptfoo_results(
-            output, ["q1"], ["a1"], [["c1"]], ["gt1"],
-            ["faithfulness"], 0.7,
+            output,
+            ["q1"],
+            ["a1"],
+            [["c1"]],
+            ["gt1"],
+            ["faithfulness"],
+            0.7,
         )
         assert len(results) == 1
         assert results[0].scores["faithfulness"] == pytest.approx(0.8)
@@ -283,6 +353,7 @@ class TestPromptfooBackend:
 # ---------------------------------------------------------------------------
 # Save / load results
 # ---------------------------------------------------------------------------
+
 
 class TestSaveResults:
     def test_round_trip(self, tmp_path):
@@ -313,6 +384,7 @@ class TestSaveResults:
 # ---------------------------------------------------------------------------
 # Display (smoke test)
 # ---------------------------------------------------------------------------
+
 
 class TestDisplay:
     def test_print_eval_summary_runs(self):

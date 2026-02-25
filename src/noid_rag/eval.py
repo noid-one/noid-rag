@@ -62,9 +62,10 @@ async def run_evaluation(
     eval_config: EvalConfig,
     settings: Settings,
     rag: NoidRag,
-    top_k: int = 5,
+    top_k: int | None = None,
 ) -> EvalSummary:
     """Run full evaluation: RAG pipeline + scoring backend."""
+    top_k = settings.search.top_k if top_k is None else top_k
     valid_backends = ("ragas", "promptfoo")
     if eval_config.backend not in valid_backends:
         raise ValueError(

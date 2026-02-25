@@ -90,13 +90,13 @@ class PgVectorStore:
                         VALUES
                             (:id, :doc_id, :text, CAST(:embedding AS vector),
                              CAST(:metadata AS jsonb), :created_at, :updated_at,
-                             to_tsvector('english', :text))
+                             to_tsvector(:fts_lang, :text))
                         ON CONFLICT (id) DO UPDATE SET
                             text = EXCLUDED.text,
                             embedding = EXCLUDED.embedding,
                             metadata = EXCLUDED.metadata,
                             updated_at = EXCLUDED.updated_at,
-                            tsv = to_tsvector('english', EXCLUDED.text)
+                            tsv = to_tsvector(:fts_lang, EXCLUDED.text)
                     """),
                     {
                         "id": chunk.id,
@@ -106,6 +106,7 @@ class PgVectorStore:
                         "metadata": json.dumps(chunk.metadata),
                         "created_at": now,
                         "updated_at": now,
+                        "fts_lang": self.config.fts_language,
                     },
                 )
         return len(chunks)
@@ -172,8 +173,9 @@ class PgVectorStore:
         """Full-text keyword search using ts_rank scoring."""
         table = self.config.table_name
 
-        conditions = ["tsv @@ plainto_tsquery('english', :query)"]
-        params: dict[str, Any] = {"query": query, "top_k": top_k}
+        fts_lang = self.config.fts_language
+        conditions = ["tsv @@ plainto_tsquery(:fts_lang, :query)"]
+        params: dict[str, Any] = {"query": query, "top_k": top_k, "fts_lang": fts_lang}
 
         if filter_metadata:
             for i, (key, value) in enumerate(filter_metadata.items()):
@@ -192,7 +194,7 @@ class PgVectorStore:
             result = await conn.execute(
                 text(f"""
                     SELECT id, document_id, text, metadata,
-                           ts_rank(tsv, plainto_tsquery('english', :query)) AS score
+                           ts_rank(tsv, plainto_tsquery(:fts_lang, :query)) AS score
                     FROM {table}
                     {where_clause}
                     ORDER BY score DESC

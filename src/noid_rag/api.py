@@ -43,15 +43,15 @@ class NoidRag:
         """Parse, chunk, embed, and store a document."""
         return asyncio.run(self.aingest(source))
 
-    def search(self, query: str, top_k: int = 5) -> list[SearchResult]:
+    def search(self, query: str, top_k: int | None = None) -> list[SearchResult]:
         """Hybrid search (vector + keyword with RRF)."""
         return asyncio.run(self.asearch(query, top_k=top_k))
 
-    def answer(self, query: str, top_k: int = 5) -> AnswerResult:
+    def answer(self, query: str, top_k: int | None = None) -> AnswerResult:
         """Search and synthesize an answer via LLM."""
         return asyncio.run(self.aanswer(query, top_k=top_k))
 
-    def eval(self, dataset: str | Path, top_k: int = 5) -> EvalSummary:
+    def eval(self, dataset: str | Path, top_k: int | None = None) -> EvalSummary:
         """Evaluate RAG pipeline against a test dataset."""
         return asyncio.run(self.aeval(dataset, top_k=top_k))
 
@@ -94,21 +94,27 @@ class NoidRag:
 
         return {"chunks_stored": count, "document_id": doc.id}
 
-    async def asearch(self, query: str, top_k: int = 5) -> list[SearchResult]:
+    async def asearch(self, query: str, top_k: int | None = None) -> list[SearchResult]:
         """Async: hybrid search (vector + keyword with RRF)."""
         from noid_rag.embeddings import EmbeddingClient
         from noid_rag.vectorstore import PgVectorStore
+
+        top_k = self.settings.search.top_k if top_k is None else top_k
+        rrf_k = self.settings.search.rrf_k
 
         embed_client = EmbeddingClient(config=self.settings.embedding)
         query_embedding = await embed_client.embed_query(query)
 
         async with PgVectorStore(config=self.settings.vectorstore) as store:
-            return await store.hybrid_search(query_embedding, query, top_k=top_k)
+            return await store.hybrid_search(
+                query_embedding, query, top_k=top_k, rrf_k=rrf_k,
+            )
 
-    async def aanswer(self, query: str, top_k: int = 5) -> AnswerResult:
+    async def aanswer(self, query: str, top_k: int | None = None) -> AnswerResult:
         """Async: search and synthesize an answer via LLM."""
         from noid_rag.llm import LLMClient
 
+        top_k = self.settings.search.top_k if top_k is None else top_k
         results = await self.asearch(query, top_k=top_k)
 
         if not results:
@@ -131,10 +137,11 @@ class NoidRag:
             model=self.settings.llm.model,
         )
 
-    async def aeval(self, dataset: str | Path, top_k: int = 5) -> EvalSummary:
+    async def aeval(self, dataset: str | Path, top_k: int | None = None) -> EvalSummary:
         """Async: evaluate RAG pipeline against a test dataset."""
         from noid_rag.eval import run_evaluation
 
+        top_k = self.settings.search.top_k if top_k is None else top_k
         return await run_evaluation(
             dataset, self.settings.eval, self.settings, self, top_k=top_k,
         )

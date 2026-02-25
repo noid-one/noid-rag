@@ -7,12 +7,6 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from noid_rag.config import LLMConfig
 
-_SYSTEM_PROMPT = (
-    "You are a helpful assistant. Answer the user's question based ONLY on the "
-    "provided context. If the context doesn't contain enough information to answer, "
-    "say so clearly. Be concise and direct."
-)
-
 
 class LLMClient:
     """OpenAI-compatible chat completions client."""
@@ -41,8 +35,9 @@ class LLMClient:
                 json={
                     "model": self.config.model,
                     "max_tokens": self.config.max_tokens,
+                    "temperature": self.config.temperature,
                     "messages": [
-                        {"role": "system", "content": _SYSTEM_PROMPT},
+                        {"role": "system", "content": self.config.system_prompt},
                         {"role": "user", "content": user_message},
                     ],
                 },

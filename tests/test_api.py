@@ -142,7 +142,7 @@ class TestNoidRagSearch:
         assert results[0].score == 0.95
         mock_embed.embed_query.assert_called_once_with("test query")
         mock_store.hybrid_search.assert_called_once_with(
-            query_embedding, "test query", top_k=3
+            query_embedding, "test query", top_k=3, rrf_k=60,
         )
 
 

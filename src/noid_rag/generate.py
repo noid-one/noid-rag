@@ -59,6 +59,7 @@ async def _call_llm(
     model: str,
     chunk_text: str,
     num_questions: int,
+    max_tokens: int = 2048,
 ) -> list[dict[str, str]]:
     """Call the LLM to generate Q&A pairs from a single chunk."""
     prompt = _GENERATION_PROMPT.format(
@@ -71,7 +72,7 @@ async def _call_llm(
             llm_config.api_url,
             json={
                 "model": model,
-                "max_tokens": 2048,
+                "max_tokens": max_tokens,
                 "messages": [{"role": "user", "content": prompt}],
             },
             headers={
@@ -111,6 +112,7 @@ async def generate_qa_pairs(
     model: str,
     questions_per_chunk: int = 3,
     num_questions: int | None = None,
+    max_tokens: int = 2048,
     progress_callback: Any | None = None,
 ) -> list[dict[str, str]]:
     """Generate Q&A pairs from chunks using an LLM.
@@ -133,7 +135,9 @@ async def generate_qa_pairs(
             break
 
         try:
-            pairs = await _call_llm(llm_config, model, chunk["text"], questions_per_chunk)
+            pairs = await _call_llm(
+                llm_config, model, chunk["text"], questions_per_chunk, max_tokens=max_tokens,
+            )
             all_pairs.extend(pairs)
         except Exception:
             # Skip chunks that fail after retries
@@ -201,6 +205,7 @@ async def run_generate(
         model=final_model,
         questions_per_chunk=qpc,
         num_questions=final_num_questions,
+        max_tokens=gen_config.max_tokens,
         progress_callback=progress_callback,
     )
 

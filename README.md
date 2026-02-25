@@ -12,7 +12,8 @@ Production RAG CLI and Python library. Parse documents, chunk them, generate emb
 - **Hybrid search** — vector + keyword search with Reciprocal Rank Fusion (RRF)
 - **Batch processing** with progress bars, retry support, and error resilience
 - **Python API** (`NoidRag` class) with sync and async interfaces
-- **Configurable** via YAML, environment variables, or both
+- **Eval & tuning** — evaluate pipeline quality with RAGAS or promptfoo, generate synthetic datasets
+- **Fully configurable** — every quality-affecting parameter tunable via YAML, env vars, or both
 
 ## Quick Start
 
@@ -113,16 +114,25 @@ vectorstore:
   table_name: documents
   embedding_dim: 1536
   pool_size: 20
+  fts_language: english  # PostgreSQL FTS language (english, spanish, simple, etc.)
+
+search:
+  top_k: 5              # chunks to retrieve per query
+  rrf_k: 60             # Reciprocal Rank Fusion constant
 
 llm:
   api_url: https://openrouter.ai/api/v1/chat/completions
   model: openai/gpt-4o-mini
   max_tokens: 1024
+  temperature: 0.0       # 0.0 = deterministic, best for RAG
+  # system_prompt: "..."  # customize answer behavior
 
 batch:
   max_retries: 3
   continue_on_error: true
 ```
+
+See `config.example.yml` for the full list of options with detailed comments.
 
 ## CLI Usage
 
@@ -169,6 +179,23 @@ noid-rag batch ./docs/ --dry-run             # List files without processing
 noid-rag batch ./docs/ --retry <run-id>      # Retry failed files from a previous run
 ```
 
+### `generate` — Generate synthetic eval datasets
+
+```bash
+noid-rag generate dataset.yml                   # Generate from indexed docs
+noid-rag generate dataset.yml --num-questions 50
+noid-rag generate dataset.yml --strategy random  # random or diverse sampling
+```
+
+### `eval` — Evaluate RAG pipeline quality
+
+```bash
+noid-rag eval dataset.yml                        # Run with default metrics
+noid-rag eval dataset.yml --backend promptfoo    # Use promptfoo instead of ragas
+noid-rag eval dataset.yml --metrics faithfulness,context_precision
+noid-rag eval dataset.yml --top-k 10 --verbose   # Per-question breakdown
+```
+
 ### `info` — Vector store statistics
 
 ```bash
@@ -193,11 +220,11 @@ chunks = rag.chunk("document.pdf")
 # Full pipeline: parse, chunk, embed, store
 result = rag.ingest("document.pdf")
 
-# Semantic search
-results = rag.search("your query", top_k=5)
+# Semantic search (top_k defaults to config, or pass explicitly)
+results = rag.search("your query")
 
 # Search + LLM answer synthesis
-answer = rag.answer("your query", top_k=5)
+answer = rag.answer("your query", top_k=10)
 
 # Batch process a directory
 result = rag.batch("./docs/", pattern="*.pdf")
@@ -213,8 +240,8 @@ rag = NoidRag()
 
 async def main():
     result = await rag.aingest("document.pdf")
-    results = await rag.asearch("your query", top_k=5)
-    answer = await rag.aanswer("your query", top_k=5)
+    results = await rag.asearch("your query")
+    answer = await rag.aanswer("your query", top_k=10)
     batch_result = await rag.abatch("./docs/", pattern="*.pdf")
 
 asyncio.run(main())

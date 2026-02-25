@@ -10,7 +10,9 @@ from noid_rag.cli.display import console, print_error, print_eval_summary, print
 def eval_command(
     dataset: str = typer.Argument(..., help="Path to YAML/JSON eval dataset"),
     backend: str | None = typer.Option(None, "--backend", "-b", help="ragas or promptfoo"),
-    top_k: int = typer.Option(5, "--top-k", "-k", help="Contexts to retrieve per question"),
+    top_k: int | None = typer.Option(
+        None, "--top-k", "-k", help="Contexts to retrieve per question",
+    ),
     metrics: str | None = typer.Option(
         None, "--metrics", "-m", help="Comma-separated metric names"
     ),
