@@ -136,7 +136,11 @@ async def generate_qa_pairs(
 
         try:
             pairs = await _call_llm(
-                llm_config, model, chunk["text"], questions_per_chunk, max_tokens=max_tokens,
+                llm_config,
+                model,
+                chunk["text"],
+                questions_per_chunk,
+                max_tokens=max_tokens,
             )
             all_pairs.extend(pairs)
         except Exception:

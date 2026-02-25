@@ -92,14 +92,22 @@ async def run_evaluation(
         from noid_rag.eval_backends.ragas_backend import run_ragas
 
         results = await run_ragas(
-            q_texts, answers, contexts, ground_truths,
-            eval_config, settings.llm,
+            q_texts,
+            answers,
+            contexts,
+            ground_truths,
+            eval_config,
+            settings.llm,
         )
     else:  # "promptfoo" — the only other Literal value
         from noid_rag.eval_backends.promptfoo_backend import run_promptfoo
 
         results = await run_promptfoo(
-            q_texts, answers, contexts, ground_truths, eval_config,
+            q_texts,
+            answers,
+            contexts,
+            ground_truths,
+            eval_config,
         )
 
     mean_scores = _compute_mean_scores(results)

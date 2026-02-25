@@ -47,9 +47,7 @@ async def run_promptfoo(
     Requires Node.js and npx available on PATH.
     """
     if not shutil.which("npx"):
-        raise RuntimeError(
-            "npx is not available. Install Node.js to use the promptfoo backend."
-        )
+        raise RuntimeError("npx is not available. Install Node.js to use the promptfoo backend.")
 
     with tempfile.TemporaryDirectory(prefix="noid-rag-eval-") as tmp_dir:
         tmp_path = Path(tmp_dir)
@@ -58,17 +56,19 @@ async def run_promptfoo(
 
         tests = []
         for q, a, c, gt in zip(questions, answers, contexts, ground_truths):
-            tests.append({
-                "vars": {
-                    "query": q,
-                    "context": "\n---\n".join(c),
-                    "answer": a,
-                    "ground_truth": gt or "",
-                },
-                "assert": _build_assertions(
-                    eval_config.metrics, eval_config.promptfoo_threshold
-                ),
-            })
+            tests.append(
+                {
+                    "vars": {
+                        "query": q,
+                        "context": "\n---\n".join(c),
+                        "answer": a,
+                        "ground_truth": gt or "",
+                    },
+                    "assert": _build_assertions(
+                        eval_config.metrics, eval_config.promptfoo_threshold
+                    ),
+                }
+            )
 
         config = {
             "prompts": ["{{answer}}"],
@@ -80,9 +80,13 @@ async def run_promptfoo(
             yaml.dump(config, f, default_flow_style=False)
 
         proc = await asyncio.create_subprocess_exec(
-            "npx", "promptfoo", "eval",
-            "-c", str(config_path),
-            "-o", str(output_path),
+            "npx",
+            "promptfoo",
+            "eval",
+            "-c",
+            str(config_path),
+            "-o",
+            str(output_path),
             "--no-progress-bar",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -98,13 +102,17 @@ async def run_promptfoo(
             out = stdout.decode(errors="replace")[:2000]
             err = stderr.decode(errors="replace")[:2000]
             raise RuntimeError(
-                f"promptfoo eval failed (exit {proc.returncode}):\n"
-                f"stdout: {out}\nstderr: {err}"
+                f"promptfoo eval failed (exit {proc.returncode}):\nstdout: {out}\nstderr: {err}"
             )
 
         return _parse_promptfoo_results(
-            output_path, questions, answers, contexts, ground_truths,
-            eval_config.metrics, eval_config.promptfoo_threshold,
+            output_path,
+            questions,
+            answers,
+            contexts,
+            ground_truths,
+            eval_config.metrics,
+            eval_config.promptfoo_threshold,
         )
 
 

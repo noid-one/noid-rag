@@ -18,9 +18,7 @@ def tune_command(
     max_trials: Optional[int] = typer.Option(
         None, "--max-trials", "-n", help="Maximum number of trials"
     ),
-    output: Optional[str] = typer.Option(
-        None, "--output", "-o", help="Export results to JSON"
-    ),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Export results to JSON"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show per-trial details"),
 ):
     """Optimize RAG parameters via Bayesian search (Optuna)."""
@@ -42,9 +40,7 @@ def tune_command(
         def on_progress(trial_num: int, total_trials: int, best_score: float) -> None:
             nonlocal task_id
             if task_id is None:
-                task_id = progress.add_task(
-                    f"Tuning ({total_trials} trials)", total=total_trials
-                )
+                task_id = progress.add_task(f"Tuning ({total_trials} trials)", total=total_trials)
             progress.update(
                 task_id,
                 completed=trial_num,

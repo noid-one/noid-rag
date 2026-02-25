@@ -68,9 +68,7 @@ def batch(
                 task = progress.add_task("Processing...", total=len(files))
 
                 def on_progress(filename: str, current: int, total: int):
-                    progress.update(
-                        task, completed=current, description=f"Processing {filename}"
-                    )
+                    progress.update(task, completed=current, description=f"Processing {filename}")
 
                 result = await processor.process(files, process_one, progress=on_progress)
 

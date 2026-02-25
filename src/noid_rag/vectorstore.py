@@ -40,7 +40,8 @@ class PgVectorStore:
         table = self.config.table_name
         async with self._engine.begin() as conn:
             await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-            await conn.execute(text(f"""
+            await conn.execute(
+                text(f"""
                 CREATE TABLE IF NOT EXISTS {table} (
                     id            TEXT PRIMARY KEY,
                     document_id   TEXT NOT NULL,
@@ -50,26 +51,33 @@ class PgVectorStore:
                     created_at    TIMESTAMPTZ DEFAULT NOW(),
                     updated_at    TIMESTAMPTZ DEFAULT NOW()
                 )
-            """))
+            """)
+            )
             # Create indexes if they don't exist
-            await conn.execute(text(f"""
+            await conn.execute(
+                text(f"""
                 CREATE INDEX IF NOT EXISTS idx_{table}_embedding_hnsw
                 ON {table} USING hnsw (embedding vector_cosine_ops)
                 WITH (m={self.config.hnsw_m}, ef_construction={self.config.hnsw_ef_construction})
-            """))
-            await conn.execute(text(f"""
+            """)
+            )
+            await conn.execute(
+                text(f"""
                 CREATE INDEX IF NOT EXISTS idx_{table}_document_id ON {table} (document_id)
-            """))
-            await conn.execute(text(f"""
+            """)
+            )
+            await conn.execute(
+                text(f"""
                 CREATE INDEX IF NOT EXISTS idx_{table}_metadata ON {table} USING gin (metadata)
-            """))
+            """)
+            )
             # Full-text search: tsvector column + GIN index
-            await conn.execute(text(
-                f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS tsv tsvector"
-            ))
-            await conn.execute(text(f"""
+            await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS tsv tsvector"))
+            await conn.execute(
+                text(f"""
                 CREATE INDEX IF NOT EXISTS idx_{table}_tsv ON {table} USING gin(tsv)
-            """))
+            """)
+            )
 
     async def upsert(self, chunks: list[Chunk]) -> int:
         """Upsert chunks into the store. Returns count of upserted rows."""
@@ -247,10 +255,7 @@ class PgVectorStore:
         # Sort by fused score descending, take top_k
         sorted_ids = sorted(rrf_scores, key=lambda cid: rrf_scores[cid], reverse=True)[:top_k]
 
-        return [
-            replace(result_map[cid], score=rrf_scores[cid])
-            for cid in sorted_ids
-        ]
+        return [replace(result_map[cid], score=rrf_scores[cid]) for cid in sorted_ids]
 
     async def sample_chunks(
         self,
@@ -325,9 +330,7 @@ class PgVectorStore:
             total = await conn.execute(text(f"SELECT COUNT(*) FROM {table}"))
             total_count = total.scalar()
 
-            docs = await conn.execute(
-                text(f"SELECT COUNT(DISTINCT document_id) FROM {table}")
-            )
+            docs = await conn.execute(text(f"SELECT COUNT(DISTINCT document_id) FROM {table}"))
             doc_count = docs.scalar()
 
         return {

@@ -17,9 +17,11 @@ app = typer.Typer(
     pretty_exceptions_enable=False,
 )
 
+
 # Global state
 class State:
     settings: Settings = Settings()
+
 
 state = State()
 

@@ -85,9 +85,7 @@ class BatchProcessor:
                 progress(file_path.name, i + 1, len(files))
 
             if dry_run:
-                result.files.append(
-                    FileResult(path=str(file_path), status="skipped")
-                )
+                result.files.append(FileResult(path=str(file_path), status="skipped"))
                 result.skipped += 1
                 continue
 
@@ -105,9 +103,7 @@ class BatchProcessor:
         self._save_history(result)
         return result
 
-    async def _process_one(
-        self, file_path: Path, process_fn: Callable[[Path], Any]
-    ) -> FileResult:
+    async def _process_one(self, file_path: Path, process_fn: Callable[[Path], Any]) -> FileResult:
         """Process a single file with retries."""
         start = time.monotonic()
         try:

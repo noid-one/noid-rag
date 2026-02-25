@@ -11,7 +11,10 @@ def eval_command(
     dataset: str = typer.Argument(..., help="Path to YAML/JSON eval dataset"),
     backend: str | None = typer.Option(None, "--backend", "-b", help="ragas or promptfoo"),
     top_k: int | None = typer.Option(
-        None, "--top-k", "-k", help="Contexts to retrieve per question",
+        None,
+        "--top-k",
+        "-k",
+        help="Contexts to retrieve per question",
     ),
     metrics: str | None = typer.Option(
         None, "--metrics", "-m", help="Comma-separated metric names"
@@ -31,8 +34,7 @@ def eval_command(
         if backend:
             if backend not in valid_backends:
                 print_error(
-                    f"Invalid backend {backend!r}. "
-                    f"Choose from: {', '.join(valid_backends)}"
+                    f"Invalid backend {backend!r}. Choose from: {', '.join(valid_backends)}"
                 )
                 raise typer.Exit(1)
             eval_config.backend = backend

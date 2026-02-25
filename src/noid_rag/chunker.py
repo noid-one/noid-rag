@@ -39,11 +39,13 @@ def _hybrid_chunk(doc: Document, config: ChunkerConfig) -> list[Chunk]:
             if hasattr(chunk_obj.meta, "page") and chunk_obj.meta.page is not None:
                 meta["page"] = chunk_obj.meta.page
 
-        chunks.append(Chunk(
-            text=text,
-            document_id=doc.id,
-            metadata=meta,
-        ))
+        chunks.append(
+            Chunk(
+                text=text,
+                document_id=doc.id,
+                metadata=meta,
+            )
+        )
 
     return chunks
 
@@ -65,11 +67,13 @@ def _fixed_chunk(doc: Document, config: ChunkerConfig) -> list[Chunk]:
         chunk_text = text[start:end]
 
         if chunk_text.strip():
-            chunks.append(Chunk(
-                text=chunk_text.strip(),
-                document_id=doc.id,
-                metadata={**doc.metadata, "chunk_method": "fixed"},
-            ))
+            chunks.append(
+                Chunk(
+                    text=chunk_text.strip(),
+                    document_id=doc.id,
+                    metadata={**doc.metadata, "chunk_method": "fixed"},
+                )
+            )
 
         start += step
 

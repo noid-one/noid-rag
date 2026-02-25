@@ -28,13 +28,16 @@ def print_warning(message: str) -> None:
 def print_document(doc: Any) -> None:
     """Display a parsed document."""
     from noid_rag.models import Document
+
     if not isinstance(doc, Document):
         return
-    console.print(Panel(
-        doc.content[:2000] + ("..." if len(doc.content) > 2000 else ""),
-        title=f"[bold]{doc.source}[/bold]",
-        subtitle=f"ID: {doc.id} | {len(doc.content)} chars",
-    ))
+    console.print(
+        Panel(
+            doc.content[:2000] + ("..." if len(doc.content) > 2000 else ""),
+            title=f"[bold]{doc.source}[/bold]",
+            subtitle=f"ID: {doc.id} | {len(doc.content)} chars",
+        )
+    )
     if doc.metadata:
         table = Table(title="Metadata", show_header=True)
         table.add_column("Key", style="cyan")
@@ -68,34 +71,41 @@ def print_search_results(results: list[Any]) -> None:
         return
 
     for i, r in enumerate(results):
-        console.print(Panel(
-            r.text,
-            title=f"[bold]#{i+1}[/bold] Score: {r.score:.4f}",
-            subtitle=f"Chunk: {r.chunk_id} | Doc: {r.document_id}",
-        ))
+        console.print(
+            Panel(
+                r.text,
+                title=f"[bold]#{i + 1}[/bold] Score: {r.score:.4f}",
+                subtitle=f"Chunk: {r.chunk_id} | Doc: {r.document_id}",
+            )
+        )
 
 
 def print_answer_result(result: Any) -> None:
     """Display an LLM-synthesized answer with its sources."""
     from noid_rag.models import AnswerResult
+
     if not isinstance(result, AnswerResult):
         return
 
     if result.sources:
         console.print("[bold]Sources:[/bold]")
         for i, r in enumerate(result.sources):
-            console.print(Panel(
-                r.text,
-                title=f"[bold]#{i+1}[/bold] Score: {r.score:.4f}",
-                subtitle=f"Chunk: {r.chunk_id} | Doc: {r.document_id}",
-            ))
+            console.print(
+                Panel(
+                    r.text,
+                    title=f"[bold]#{i + 1}[/bold] Score: {r.score:.4f}",
+                    subtitle=f"Chunk: {r.chunk_id} | Doc: {r.document_id}",
+                )
+            )
 
-    console.print(Panel(
-        result.answer,
-        title="[bold green]Answer[/bold green]",
-        subtitle=f"Model: {result.model}",
-        border_style="green",
-    ))
+    console.print(
+        Panel(
+            result.answer,
+            title="[bold green]Answer[/bold green]",
+            subtitle=f"Model: {result.model}",
+            border_style="green",
+        )
+    )
 
 
 def print_stats(stats: dict[str, Any]) -> None:
@@ -131,6 +141,7 @@ def _score_rating(score: float) -> str:
 def print_eval_summary(summary: Any, verbose: bool = False) -> None:
     """Display evaluation results."""
     from noid_rag.models import EvalSummary
+
     if not isinstance(summary, EvalSummary):
         return
 
@@ -162,19 +173,20 @@ def print_eval_details(summary: Any) -> None:
     for i, r in enumerate(summary.results):
         console.print()
         score_parts = [
-            f"[{_score_color(s)}]{m}: {s:.3f}[/{_score_color(s)}]"
-            for m, s in r.scores.items()
+            f"[{_score_color(s)}]{m}: {s:.3f}[/{_score_color(s)}]" for m, s in r.scores.items()
         ]
         scores_str = " | ".join(score_parts) if score_parts else "no scores"
 
         answer_preview = r.answer[:200] + "..." if len(r.answer) > 200 else r.answer
-        console.print(Panel(
-            f"[bold]Q:[/bold] {r.question}\n"
-            f"[bold]A:[/bold] {answer_preview}\n"
-            f"[bold]Scores:[/bold] {scores_str}",
-            title=f"[bold]Question #{i + 1}[/bold]",
-            subtitle=f"Contexts: {len(r.contexts)}",
-        ))
+        console.print(
+            Panel(
+                f"[bold]Q:[/bold] {r.question}\n"
+                f"[bold]A:[/bold] {answer_preview}\n"
+                f"[bold]Scores:[/bold] {scores_str}",
+                title=f"[bold]Question #{i + 1}[/bold]",
+                subtitle=f"Contexts: {len(r.contexts)}",
+            )
+        )
 
 
 def print_generate_summary(summary: dict[str, Any]) -> None:

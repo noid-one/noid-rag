@@ -85,10 +85,14 @@ class TestBatchConfig:
 class TestLoadYamlConfig:
     def test_load_from_file(self, tmp_path):
         config_file = tmp_path / "config.yml"
-        config_file.write_text(yaml.dump({
-            "verbose": True,
-            "parser": {"ocr_enabled": False},
-        }))
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "verbose": True,
+                    "parser": {"ocr_enabled": False},
+                }
+            )
+        )
         data = _load_yaml_config(config_file)
         assert data["verbose"] is True
         assert data["parser"]["ocr_enabled"] is False
@@ -130,10 +134,14 @@ class TestSettings:
 
     def test_load_from_yaml(self, tmp_path):
         config_file = tmp_path / "config.yml"
-        config_file.write_text(yaml.dump({
-            "verbose": True,
-            "parser": {"ocr_engine": "tesseract"},
-        }))
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "verbose": True,
+                    "parser": {"ocr_engine": "tesseract"},
+                }
+            )
+        )
         s = Settings.load(config_file=config_file)
         assert s.verbose is True
         assert s.parser.ocr_engine == "tesseract"

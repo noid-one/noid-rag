@@ -1,6 +1,5 @@
 """Tests for vector store (mocked -- no real DB)."""
 
-
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,16 +10,12 @@ from noid_rag.vectorstore import PgVectorStore
 
 
 def _make_search_result(chunk_id, score, text="text", doc_id="doc_1"):
-    return SearchResult(
-        chunk_id=chunk_id, text=text, score=score, metadata={}, document_id=doc_id
-    )
+    return SearchResult(chunk_id=chunk_id, text=text, score=score, metadata={}, document_id=doc_id)
 
 
 class TestPgVectorStoreInit:
     def test_init_with_config(self):
-        config = VectorStoreConfig(
-            dsn="postgresql+asyncpg://test@localhost/test", embedding_dim=10
-        )
+        config = VectorStoreConfig(dsn="postgresql+asyncpg://test@localhost/test", embedding_dim=10)
         store = PgVectorStore(config=config)
         assert store.config.dsn == "postgresql+asyncpg://test@localhost/test"
         assert store.config.embedding_dim == 10
@@ -43,9 +38,7 @@ def _make_async_cm(return_value):
 class TestPgVectorStoreConnect:
     @pytest.fixture
     def config(self):
-        return VectorStoreConfig(
-            dsn="postgresql+asyncpg://test@localhost/test", embedding_dim=10
-        )
+        return VectorStoreConfig(dsn="postgresql+asyncpg://test@localhost/test", embedding_dim=10)
 
     @pytest.mark.asyncio
     @patch("noid_rag.vectorstore.create_async_engine")
@@ -66,9 +59,7 @@ class TestPgVectorStoreContextManager:
     @pytest.mark.asyncio
     @patch("noid_rag.vectorstore.create_async_engine")
     async def test_context_manager(self, mock_create_engine):
-        config = VectorStoreConfig(
-            dsn="postgresql+asyncpg://test@localhost/test", embedding_dim=10
-        )
+        config = VectorStoreConfig(dsn="postgresql+asyncpg://test@localhost/test", embedding_dim=10)
 
         mock_conn = AsyncMock()
         mock_engine = MagicMock()
@@ -86,9 +77,7 @@ class TestPgVectorStoreContextManager:
 class TestPgVectorStoreUpsert:
     @pytest.fixture
     def config(self):
-        return VectorStoreConfig(
-            dsn="postgresql+asyncpg://test@localhost/test", embedding_dim=10
-        )
+        return VectorStoreConfig(dsn="postgresql+asyncpg://test@localhost/test", embedding_dim=10)
 
     @pytest.mark.asyncio
     async def test_upsert_requires_embedding(self, config):
@@ -129,9 +118,7 @@ class TestPgVectorStoreUpsert:
 class TestPgVectorStoreSearch:
     @pytest.fixture
     def config(self):
-        return VectorStoreConfig(
-            dsn="postgresql+asyncpg://test@localhost/test", embedding_dim=10
-        )
+        return VectorStoreConfig(dsn="postgresql+asyncpg://test@localhost/test", embedding_dim=10)
 
     @pytest.mark.asyncio
     async def test_search_returns_search_results(self, config):
@@ -190,9 +177,7 @@ class TestPgVectorStoreSearch:
 class TestPgVectorStoreDelete:
     @pytest.mark.asyncio
     async def test_delete_by_document_id(self):
-        config = VectorStoreConfig(
-            dsn="postgresql+asyncpg://test@localhost/test", embedding_dim=10
-        )
+        config = VectorStoreConfig(dsn="postgresql+asyncpg://test@localhost/test", embedding_dim=10)
         store = PgVectorStore(config=config)
 
         mock_result = MagicMock()
@@ -240,9 +225,7 @@ class TestPgVectorStoreStats:
 class TestPgVectorStoreClose:
     @pytest.mark.asyncio
     async def test_close_disposes_engine(self):
-        config = VectorStoreConfig(
-            dsn="postgresql+asyncpg://test@localhost/test", embedding_dim=10
-        )
+        config = VectorStoreConfig(dsn="postgresql+asyncpg://test@localhost/test", embedding_dim=10)
         store = PgVectorStore(config=config)
         mock_engine = MagicMock()
         mock_engine.dispose = AsyncMock()
@@ -262,9 +245,7 @@ class TestPgVectorStoreClose:
 class TestPgVectorStoreKeywordSearch:
     @pytest.fixture
     def config(self):
-        return VectorStoreConfig(
-            dsn="postgresql+asyncpg://test@localhost/test", embedding_dim=10
-        )
+        return VectorStoreConfig(dsn="postgresql+asyncpg://test@localhost/test", embedding_dim=10)
 
     @pytest.mark.asyncio
     async def test_keyword_search_returns_results(self, config):
@@ -356,17 +337,13 @@ class TestPgVectorStoreKeywordSearch:
         store._engine.connect.return_value = _make_async_cm(AsyncMock())
 
         with pytest.raises(ValueError, match="not a safe identifier"):
-            await store.keyword_search(
-                "test", filter_metadata={"Robert'; DROP TABLE --": "val"}
-            )
+            await store.keyword_search("test", filter_metadata={"Robert'; DROP TABLE --": "val"})
 
 
 class TestPgVectorStoreHybridSearch:
     @pytest.fixture
     def config(self):
-        return VectorStoreConfig(
-            dsn="postgresql+asyncpg://test@localhost/test", embedding_dim=10
-        )
+        return VectorStoreConfig(dsn="postgresql+asyncpg://test@localhost/test", embedding_dim=10)
 
     @pytest.mark.asyncio
     async def test_hybrid_deduplicates_results(self, config):

@@ -1,6 +1,5 @@
 """Tests for embedding client."""
 
-
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -91,12 +90,14 @@ class TestEmbedTexts:
     @pytest.mark.asyncio
     @patch("noid_rag.embeddings.httpx.AsyncClient")
     async def test_embed_texts_returns_embeddings(self, mock_client_cls, client):
-        mock_client = _make_mock_client({
-            "data": [
-                {"index": 0, "embedding": [0.1] * 10},
-                {"index": 1, "embedding": [0.2] * 10},
-            ]
-        })
+        mock_client = _make_mock_client(
+            {
+                "data": [
+                    {"index": 0, "embedding": [0.1] * 10},
+                    {"index": 1, "embedding": [0.2] * 10},
+                ]
+            }
+        )
         mock_client_cls.return_value = mock_client
 
         result = await client.embed_texts(["hello", "world"])
@@ -109,12 +110,14 @@ class TestEmbedTexts:
     @patch("noid_rag.embeddings.httpx.AsyncClient")
     async def test_embed_texts_sorts_by_index(self, mock_client_cls, client):
         """API may return embeddings out of order; they should be sorted."""
-        mock_client = _make_mock_client({
-            "data": [
-                {"index": 1, "embedding": [0.2] * 10},
-                {"index": 0, "embedding": [0.1] * 10},
-            ]
-        })
+        mock_client = _make_mock_client(
+            {
+                "data": [
+                    {"index": 1, "embedding": [0.2] * 10},
+                    {"index": 0, "embedding": [0.1] * 10},
+                ]
+            }
+        )
         mock_client_cls.return_value = mock_client
 
         result = await client.embed_texts(["hello", "world"])
@@ -159,12 +162,14 @@ class TestEmbedChunks:
             Chunk(text="chunk 2", document_id="doc_1"),
         ]
 
-        mock_client = _make_mock_client({
-            "data": [
-                {"index": 0, "embedding": [0.1] * 10},
-                {"index": 1, "embedding": [0.2] * 10},
-            ]
-        })
+        mock_client = _make_mock_client(
+            {
+                "data": [
+                    {"index": 0, "embedding": [0.1] * 10},
+                    {"index": 1, "embedding": [0.2] * 10},
+                ]
+            }
+        )
         mock_client_cls.return_value = mock_client
 
         result = await client.embed_chunks(chunks)
@@ -180,9 +185,7 @@ class TestEmbedChunks:
     async def test_embed_chunks_returns_chunks(self, mock_client_cls, client):
         chunks = [Chunk(text="test", document_id="doc_1")]
 
-        mock_client = _make_mock_client({
-            "data": [{"index": 0, "embedding": [0.5] * 10}]
-        })
+        mock_client = _make_mock_client({"data": [{"index": 0, "embedding": [0.5] * 10}]})
         mock_client_cls.return_value = mock_client
 
         result = await client.embed_chunks(chunks)
@@ -199,9 +202,7 @@ class TestEmbedQuery:
     @pytest.mark.asyncio
     @patch("noid_rag.embeddings.httpx.AsyncClient")
     async def test_embed_query_returns_single_embedding(self, mock_client_cls, client):
-        mock_client = _make_mock_client({
-            "data": [{"index": 0, "embedding": [0.5] * 10}]
-        })
+        mock_client = _make_mock_client({"data": [{"index": 0, "embedding": [0.5] * 10}]})
         mock_client_cls.return_value = mock_client
 
         result = await client.embed_query("test query")

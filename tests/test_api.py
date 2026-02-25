@@ -110,9 +110,7 @@ class TestNoidRagSearch:
     @pytest.mark.asyncio
     @patch("noid_rag.vectorstore.PgVectorStore")
     @patch("noid_rag.embeddings.EmbeddingClient")
-    async def test_asearch_embeds_query_and_searches(
-        self, mock_embed_cls, mock_store_cls
-    ):
+    async def test_asearch_embeds_query_and_searches(self, mock_embed_cls, mock_store_cls):
         # Set up embedding client
         mock_embed = AsyncMock()
         query_embedding = [0.1] * 10
@@ -142,7 +140,10 @@ class TestNoidRagSearch:
         assert results[0].score == 0.95
         mock_embed.embed_query.assert_called_once_with("test query")
         mock_store.hybrid_search.assert_called_once_with(
-            query_embedding, "test query", top_k=3, rrf_k=60,
+            query_embedding,
+            "test query",
+            top_k=3,
+            rrf_k=60,
         )
 
 

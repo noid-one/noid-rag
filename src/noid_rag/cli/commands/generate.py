@@ -12,9 +12,7 @@ def generate_command(
     num_questions: int = typer.Option(
         None, "--num-questions", "-n", help="Total Q&A pairs to generate"
     ),
-    model: str | None = typer.Option(
-        None, "--model", "-m", help="Override generation model"
-    ),
+    model: str | None = typer.Option(None, "--model", "-m", help="Override generation model"),
     chunks: int | None = typer.Option(
         None, "--chunks", "-c", help="Number of source chunks to sample"
     ),

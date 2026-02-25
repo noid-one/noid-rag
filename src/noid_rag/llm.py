@@ -55,6 +55,4 @@ class LLMClient:
                 # content (e.g. user prompt reflected by some providers) into
                 # tracebacks and log aggregators.
                 preview = repr(data)[:200]
-                raise ValueError(
-                    f"Unexpected LLM response shape: {preview}..."
-                ) from exc
+                raise ValueError(f"Unexpected LLM response shape: {preview}...") from exc

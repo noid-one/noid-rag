@@ -32,11 +32,13 @@ class NoidRag:
     def parse(self, source: str | Path) -> Document:
         """Parse a document, return Document dataclass."""
         from noid_rag.parser import parse as do_parse
+
         return do_parse(source, config=self.settings.parser)
 
     def chunk(self, source: str | Path) -> list[Chunk]:
         """Parse and chunk a document."""
         from noid_rag.chunker import chunk as do_chunk
+
         doc = self.parse(source)
         return do_chunk(doc, config=self.settings.chunker)
 
@@ -67,8 +69,11 @@ class NoidRag:
         """Generate a synthetic eval dataset from indexed documents."""
         return asyncio.run(
             self.agenerate(
-                output, num_questions=num_questions, model=model,
-                num_chunks=num_chunks, strategy=strategy,
+                output,
+                num_questions=num_questions,
+                model=model,
+                num_chunks=num_chunks,
+                strategy=strategy,
             )
         )
 
@@ -140,7 +145,10 @@ class NoidRag:
 
         async with PgVectorStore(config=self.settings.vectorstore) as store:
             return await store.hybrid_search(
-                query_embedding, query, top_k=top_k, rrf_k=rrf_k,
+                query_embedding,
+                query,
+                top_k=top_k,
+                rrf_k=rrf_k,
             )
 
     async def aanswer(self, query: str, top_k: int | None = None) -> AnswerResult:
@@ -156,9 +164,7 @@ class NoidRag:
                 model=self.settings.llm.model,
             )
 
-        context = "\n\n---\n\n".join(
-            f"[Source: {r.document_id}]\n{r.text}" for r in results
-        )
+        context = "\n\n---\n\n".join(f"[Source: {r.document_id}]\n{r.text}" for r in results)
 
         llm = LLMClient(config=self.settings.llm)
         answer_text = await llm.generate(query, context)
@@ -174,7 +180,11 @@ class NoidRag:
         from noid_rag.eval import run_evaluation
 
         return await run_evaluation(  # top_k=None resolved in run_evaluation
-            dataset, self.settings.eval, self.settings, self, top_k=top_k,
+            dataset,
+            self.settings.eval,
+            self.settings,
+            self,
+            top_k=top_k,
         )
 
     async def agenerate(

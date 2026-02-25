@@ -36,9 +36,7 @@ class TestLLMClient:
         from noid_rag.llm import LLMClient
 
         mock_resp = MagicMock()
-        mock_resp.json.return_value = {
-            "choices": [{"message": {"content": "The answer is 42."}}]
-        }
+        mock_resp.json.return_value = {"choices": [{"message": {"content": "The answer is 42."}}]}
         mock_resp.raise_for_status = MagicMock()
 
         mock_client = AsyncMock()
@@ -64,9 +62,7 @@ class TestLLMClient:
         from noid_rag.llm import LLMClient
 
         mock_resp = MagicMock()
-        mock_resp.json.return_value = {
-            "choices": [{"message": {"content": "answer"}}]
-        }
+        mock_resp.json.return_value = {"choices": [{"message": {"content": "answer"}}]}
         mock_resp.raise_for_status = MagicMock()
 
         mock_client = AsyncMock()
@@ -108,9 +104,7 @@ class TestLLMClient:
         from noid_rag.llm import LLMClient
 
         mock_resp = MagicMock()
-        mock_resp.json.return_value = {
-            "choices": [{"message": {"content": "ok"}}]
-        }
+        mock_resp.json.return_value = {"choices": [{"message": {"content": "ok"}}]}
         mock_resp.raise_for_status = MagicMock()
 
         mock_client = AsyncMock()
@@ -124,9 +118,7 @@ class TestLLMClient:
 
         call_kwargs = mock_client.post.call_args
         headers = (
-            call_kwargs.kwargs.get("headers")
-            or call_kwargs[1].get("headers")
-            or call_kwargs[0][2]
+            call_kwargs.kwargs.get("headers") or call_kwargs[1].get("headers") or call_kwargs[0][2]
         )
         assert "Authorization" in headers
         assert "secret-key-xyz" in headers["Authorization"]
@@ -267,12 +259,18 @@ class TestAnswerGeneration:
 
         mock_results = [
             SearchResult(
-                chunk_id="chk_1", text="Paris is the capital.", score=0.9,
-                metadata={}, document_id="doc_1",
+                chunk_id="chk_1",
+                text="Paris is the capital.",
+                score=0.9,
+                metadata={},
+                document_id="doc_1",
             ),
             SearchResult(
-                chunk_id="chk_2", text="France is in Europe.", score=0.8,
-                metadata={}, document_id="doc_2",
+                chunk_id="chk_2",
+                text="France is in Europe.",
+                score=0.8,
+                metadata={},
+                document_id="doc_2",
             ),
         ]
         mock_asearch.return_value = mock_results

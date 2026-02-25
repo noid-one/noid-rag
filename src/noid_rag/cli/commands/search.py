@@ -32,6 +32,7 @@ def search(
 
             if output:
                 from noid_rag.export import export
+
                 export(result.sources, Path(output))
         else:
             if answer:
@@ -44,6 +45,7 @@ def search(
 
             if output:
                 from noid_rag.export import export
+
                 export(results, Path(output))
     except Exception as e:
         print_error(f"Search failed: {e}")

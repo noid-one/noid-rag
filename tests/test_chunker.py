@@ -80,11 +80,14 @@ class TestHybridChunking:
         for c in chunks:
             assert c.metadata.get("chunk_method") == "fixed"
 
-    @patch.dict(sys.modules, {
-        "docling_core": MagicMock(),
-        "docling_core.transforms": MagicMock(),
-        "docling_core.transforms.chunker": MagicMock(),
-    })
+    @patch.dict(
+        sys.modules,
+        {
+            "docling_core": MagicMock(),
+            "docling_core.transforms": MagicMock(),
+            "docling_core.transforms.chunker": MagicMock(),
+        },
+    )
     def test_hybrid_chunk_with_docling_doc(self, sample_document):
         mock_docling_doc = MagicMock()
         sample_document._docling_doc = mock_docling_doc
@@ -109,11 +112,14 @@ class TestHybridChunking:
         assert chunks[0].metadata.get("headings") == ["Section 1"]
         assert chunks[0].metadata.get("page") == 1
 
-    @patch.dict(sys.modules, {
-        "docling_core": MagicMock(),
-        "docling_core.transforms": MagicMock(),
-        "docling_core.transforms.chunker": MagicMock(),
-    })
+    @patch.dict(
+        sys.modules,
+        {
+            "docling_core": MagicMock(),
+            "docling_core.transforms": MagicMock(),
+            "docling_core.transforms.chunker": MagicMock(),
+        },
+    )
     def test_hybrid_chunk_multiple_chunks(self, sample_document):
         sample_document._docling_doc = MagicMock()
 
@@ -139,11 +145,14 @@ class TestHybridChunking:
             assert c.text == f"Chunk {i}"
             assert c.document_id == sample_document.id
 
-    @patch.dict(sys.modules, {
-        "docling_core": MagicMock(),
-        "docling_core.transforms": MagicMock(),
-        "docling_core.transforms.chunker": MagicMock(),
-    })
+    @patch.dict(
+        sys.modules,
+        {
+            "docling_core": MagicMock(),
+            "docling_core.transforms": MagicMock(),
+            "docling_core.transforms.chunker": MagicMock(),
+        },
+    )
     def test_hybrid_chunk_no_meta(self, sample_document):
         """Chunk with meta=None should still work."""
         sample_document._docling_doc = MagicMock()

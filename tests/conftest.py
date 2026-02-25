@@ -1,6 +1,5 @@
 """Shared test fixtures."""
 
-
 import pytest
 
 from noid_rag.config import Settings
