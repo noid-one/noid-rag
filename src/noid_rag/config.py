@@ -112,6 +112,11 @@ class EvalConfig(BaseModel):
     judge_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
 
 
+class TuneConfig(BaseModel):
+    max_trials: int = Field(default=30, gt=0)
+    search_space: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+
 def _load_yaml_config(path: Path | None = None) -> dict[str, Any]:
     """Load config from YAML file."""
     if path is None:
@@ -140,6 +145,7 @@ class Settings(BaseSettings):
     batch: BatchConfig = Field(default_factory=BatchConfig)
     generate: GenerateConfig = Field(default_factory=GenerateConfig)
     eval: EvalConfig = Field(default_factory=EvalConfig)
+    tune: TuneConfig = Field(default_factory=TuneConfig)
 
     config_file: Path | None = None
     verbose: bool = False

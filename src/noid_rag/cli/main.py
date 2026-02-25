@@ -9,6 +9,7 @@ import noid_rag.cli.commands.info  # noqa: F401, E402
 import noid_rag.cli.commands.ingest  # noqa: F401, E402
 import noid_rag.cli.commands.parse  # noqa: F401, E402
 import noid_rag.cli.commands.search  # noqa: F401, E402
+import noid_rag.cli.commands.tune  # noqa: F401, E402
 from noid_rag.cli.app import app
 
 

@@ -48,6 +48,9 @@ pip install .
 
 # With local embedding models (sentence-transformers)
 uv sync --extra local
+
+# With hyperparameter tuning (Optuna + ragas)
+uv sync --extra tune --extra eval
 ```
 
 ### OCR Support (optional)
@@ -196,6 +199,42 @@ noid-rag eval dataset.yml --metrics faithfulness,context_precision
 noid-rag eval dataset.yml --top-k 10 --verbose   # Per-question breakdown
 ```
 
+### `tune` — Hyperparameter optimization
+
+Automatically find optimal RAG parameters using Bayesian search (Optuna). Requires the `tune` and `eval` extras:
+
+```bash
+uv sync --extra tune --extra eval
+```
+
+Define a search space in your config YAML:
+
+```yaml
+tune:
+  max_trials: 10
+  search_space:
+    chunker:
+      max_tokens: [256, 512, 1024]       # categorical: pick one per trial
+      method: [hybrid, fixed]
+    search:
+      top_k: [3, 5, 10, 15]
+      rrf_k: [20, 40, 60, 80]
+    llm:
+      temperature: {low: 0.0, high: 0.3, step: 0.1}  # numeric range
+    embedding:
+      model: [openai/text-embedding-3-small]
+```
+
+Run tuning:
+
+```bash
+noid-rag tune dataset.yml --source doc1.pdf --source doc2.pdf
+noid-rag tune dataset.yml -s doc.pdf --max-trials 20   # override trial count
+noid-rag tune dataset.yml -s doc.pdf --output results.json --verbose
+```
+
+The optimizer uses the mean of all configured eval metrics as the objective. Ingestion is cached — trials that only change search/LLM parameters skip re-ingestion.
+
 ### `info` — Vector store statistics
 
 ```bash
@@ -228,6 +267,23 @@ answer = rag.answer("your query", top_k=10)
 
 # Batch process a directory
 result = rag.batch("./docs/", pattern="*.pdf")
+```
+
+Hyperparameter tuning:
+
+```python
+rag = NoidRag(config={
+    "tune": {
+        "max_trials": 10,
+        "search_space": {
+            "search": {"top_k": [3, 5, 10]},
+            "llm": {"temperature": {"low": 0.0, "high": 0.3, "step": 0.1}},
+        },
+    }
+})
+result = rag.tune("dataset.yml", sources=["doc.pdf"])
+print(result.best_params)  # {'search': {'top_k': 5}, 'llm': {'temperature': 0.1}}
+print(result.best_score)   # 0.82
 ```
 
 Async variants are also available:

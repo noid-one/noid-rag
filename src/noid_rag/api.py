@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from noid_rag.config import Settings
-from noid_rag.models import AnswerResult, Chunk, Document, EvalSummary, SearchResult
+from noid_rag.models import AnswerResult, Chunk, Document, EvalSummary, SearchResult, TuneResult
 
 
 class NoidRag:
@@ -69,6 +70,38 @@ class NoidRag:
                 output, num_questions=num_questions, model=model,
                 num_chunks=num_chunks, strategy=strategy,
             )
+        )
+
+    def tune(
+        self,
+        dataset: str | Path,
+        sources: list[str | Path],
+        progress_callback: Callable[[int, int, float], None] | None = None,
+    ) -> TuneResult:
+        """Run Bayesian hyperparameter optimization."""
+        from noid_rag.tune import run_tune
+
+        return run_tune(
+            str(dataset),
+            [str(s) for s in sources],
+            self.settings,
+            progress_callback=progress_callback,
+        )
+
+    async def atune(
+        self,
+        dataset: str | Path,
+        sources: list[str | Path],
+        progress_callback: Callable[[int, int, float], None] | None = None,
+    ) -> TuneResult:
+        """Async: run Bayesian hyperparameter optimization."""
+        from noid_rag.tune import arun_tune
+
+        return await arun_tune(
+            str(dataset),
+            [str(s) for s in sources],
+            self.settings,
+            progress_callback=progress_callback,
         )
 
     def batch(self, directory: str | Path, pattern: str = "*") -> dict[str, Any]:

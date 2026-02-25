@@ -84,6 +84,17 @@ class EvalResult:
 
 
 @dataclass
+class TuneResult:
+    """Results from hyperparameter tuning."""
+
+    best_params: dict[str, Any]
+    best_score: float
+    all_trials: list[dict[str, Any]]
+    total_trials: int
+    metrics_used: list[str]
+
+
+@dataclass
 class EvalSummary:
     """Aggregated evaluation results."""
 

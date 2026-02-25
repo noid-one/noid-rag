@@ -139,3 +139,48 @@ batch:
   # If one file fails during batch processing, keep going with the rest.
   # Set to false to stop immediately on first error.
   continue_on_error: true
+
+tune:
+  # Maximum number of Optuna trials (parameter combinations) to evaluate.
+  # More trials = better chance of finding the optimum, but costs more time
+  # and API calls. 20–50 is a good starting range.
+  max_trials: 10
+
+  # The search space defines which parameters Optuna will explore.
+  # Each key is a config section (chunker, search, llm, embedding),
+  # and each value maps a parameter name to its possible values.
+  search_space:
+
+    chunker:
+      # Try three different chunk sizes. Smaller chunks give more precise
+      # retrieval; larger chunks give the LLM more context per result.
+      # Format: a list = categorical choices (Optuna picks one per trial).
+      max_tokens: [256, 512, 1024]
+
+      # Try both chunking strategies.
+      #   "hybrid" uses document structure (headings, tables).
+      #   "fixed" uses a simple sliding window.
+      method: [hybrid, fixed]
+
+    search:
+      # Try different numbers of chunks to retrieve per query.
+      # Too few = missing context. Too many = diluted relevance.
+      top_k: [3, 5, 10, 15]
+
+      # Try different RRF constants for merging vector + keyword results.
+      # Lower values favor the top-ranked result more aggressively.
+      rrf_k: [20, 40, 60, 80]
+
+    llm:
+      # Explore a continuous range of temperature values.
+      # Format: a dict with low/high = numeric range. Optuna samples within it.
+      # "step" is optional — here it restricts to 0.0, 0.1, 0.2, 0.3.
+      # Uses suggest_float because the values are floats.
+      temperature: {low: 0.0, high: 0.3, step: 0.1}
+
+    embedding:
+      # Try different embedding models. Changing the model also changes the
+      # vector dimensions, which is handled automatically via EMBEDDING_DIM_MAP.
+      # ⚠️  Different embedding models require re-ingestion (new vectors),
+      #     but Optuna caches ingestion — same model+chunker combo is ingested once.
+      model: [openai/text-embedding-3-small, openai/text-embedding-3-large]

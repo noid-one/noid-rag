@@ -26,3 +26,4 @@ build/
 /docs/example
 /docs/data
 test_dataset.yml
+config.yml
