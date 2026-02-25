@@ -114,8 +114,7 @@ class NoidRag:
         """Async: search and synthesize an answer via LLM."""
         from noid_rag.llm import LLMClient
 
-        top_k = self.settings.search.top_k if top_k is None else top_k
-        results = await self.asearch(query, top_k=top_k)
+        results = await self.asearch(query, top_k=top_k)  # top_k=None resolved in asearch
 
         if not results:
             return AnswerResult(
@@ -141,8 +140,7 @@ class NoidRag:
         """Async: evaluate RAG pipeline against a test dataset."""
         from noid_rag.eval import run_evaluation
 
-        top_k = self.settings.search.top_k if top_k is None else top_k
-        return await run_evaluation(
+        return await run_evaluation(  # top_k=None resolved in run_evaluation
             dataset, self.settings.eval, self.settings, self, top_k=top_k,
         )
 

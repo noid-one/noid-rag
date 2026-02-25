@@ -7,7 +7,10 @@ from noid_rag.config import (
     BatchConfig,
     ChunkerConfig,
     EmbeddingConfig,
+    EvalConfig,
+    LLMConfig,
     ParserConfig,
+    SearchConfig,
     Settings,
     VectorStoreConfig,
     _load_yaml_config,
@@ -66,6 +69,7 @@ class TestVectorStoreConfig:
         assert c.pool_size == 20
         assert c.hnsw_m == 16
         assert c.hnsw_ef_construction == 64
+        assert c.fts_language == "english"
 
 
 class TestBatchConfig:
@@ -150,3 +154,74 @@ class TestSettings:
         monkeypatch.setenv("NOID_RAG_PARSER__OCR_ENABLED", "false")
         s = Settings()
         assert s.parser.ocr_enabled is False
+
+    def test_search_present(self):
+        s = Settings()
+        assert isinstance(s.search, SearchConfig)
+
+
+class TestSearchConfig:
+    def test_defaults(self):
+        c = SearchConfig()
+        assert c.top_k == 5
+        assert c.rrf_k == 60
+
+    def test_custom_values(self):
+        c = SearchConfig(top_k=10, rrf_k=100)
+        assert c.top_k == 10
+        assert c.rrf_k == 100
+
+    def test_top_k_must_be_positive(self):
+        with pytest.raises(Exception):
+            SearchConfig(top_k=0)
+
+    def test_rrf_k_must_be_positive(self):
+        with pytest.raises(Exception):
+            SearchConfig(rrf_k=0)
+
+
+class TestLLMConfig:
+    def test_temperature_lower_bound(self):
+        with pytest.raises(Exception):
+            LLMConfig(temperature=-0.1)
+
+    def test_temperature_upper_bound(self):
+        with pytest.raises(Exception):
+            LLMConfig(temperature=2.1)
+
+    def test_temperature_at_bounds(self):
+        assert LLMConfig(temperature=0.0).temperature == 0.0
+        assert LLMConfig(temperature=2.0).temperature == 2.0
+
+    def test_system_prompt_override(self):
+        custom = "You are a pirate."
+        c = LLMConfig(system_prompt=custom)
+        assert c.system_prompt == custom
+
+
+class TestEvalConfig:
+    def test_judge_max_tokens_must_be_positive(self):
+        with pytest.raises(Exception):
+            EvalConfig(judge_max_tokens=0)
+
+    def test_judge_temperature_lower_bound(self):
+        with pytest.raises(Exception):
+            EvalConfig(judge_temperature=-0.1)
+
+    def test_judge_temperature_upper_bound(self):
+        with pytest.raises(Exception):
+            EvalConfig(judge_temperature=2.1)
+
+    def test_judge_temperature_at_bounds(self):
+        assert EvalConfig(judge_temperature=0.0).judge_temperature == 0.0
+        assert EvalConfig(judge_temperature=2.0).judge_temperature == 2.0
+
+
+class TestVectorStoreConfigFtsLanguage:
+    def test_valid_fts_language(self):
+        c = VectorStoreConfig(fts_language="spanish")
+        assert c.fts_language == "spanish"
+
+    def test_invalid_fts_language_rejected(self):
+        with pytest.raises(Exception):
+            VectorStoreConfig(fts_language="english; DROP TABLE docs")

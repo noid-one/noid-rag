@@ -54,6 +54,19 @@ class VectorStoreConfig(BaseModel):
             )
         return v
 
+    @field_validator("fts_language")
+    @classmethod
+    def _validate_fts_language(cls, v: str) -> str:
+        """Reject fts_language values that could corrupt the regconfig cast."""
+        if not _SAFE_IDENTIFIER_RE.match(v):
+            raise ValueError(
+                f"fts_language {v!r} is not a valid PostgreSQL text-search configuration name. "
+                "Use only letters, digits, and underscores, starting with a letter or underscore "
+                "(e.g. 'english', 'spanish', 'simple'). "
+                "Schema-qualified names (e.g. 'pg_catalog.english') are not supported."
+            )
+        return v
+
 
 class SearchConfig(BaseModel):
     top_k: int = Field(default=5, gt=0)
