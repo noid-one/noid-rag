@@ -49,24 +49,19 @@ pip install .
 # With local embedding models (sentence-transformers)
 uv sync --extra local
 
-# With hyperparameter tuning (Optuna + ragas)
-uv sync --extra tune --extra eval
 ```
 
-### OCR Support (optional)
+### OCR Support
 
-[Docling](https://github.com/DS4SD/docling) is installed automatically and handles document parsing. For OCR on scanned PDFs, install one of the supported engines:
+[Docling](https://github.com/DS4SD/docling) is installed automatically and handles document parsing. EasyOCR is included as a core dependency for OCR on scanned PDFs. To use Tesseract instead:
 
 ```bash
-# EasyOCR (default, GPU-accelerated)
-pip install easyocr
-
-# Or Tesseract
+# Tesseract (alternative OCR engine)
 brew install tesseract          # macOS
 sudo apt install tesseract-ocr  # Ubuntu/Debian
 ```
 
-Set `ocr_engine` in your config to `easyocr` (default) or `tesseract`.
+Set `ocr_engine` in your config to `easyocr` (default), `tesseract`, or `auto` (tries easyocr first, falls back to tesseract).
 
 ## Configuration
 
@@ -201,13 +196,7 @@ noid-rag eval dataset.yml --top-k 10 --verbose   # Per-question breakdown
 
 ### `tune` — Hyperparameter optimization
 
-Automatically find optimal RAG parameters using Bayesian search (Optuna). Requires the `tune` and `eval` extras:
-
-```bash
-uv sync --extra tune --extra eval
-```
-
-Define a search space in your config YAML:
+Automatically find optimal RAG parameters using Bayesian search (Optuna). Define a search space in your config YAML:
 
 ```yaml
 tune:
@@ -239,6 +228,13 @@ The optimizer uses the mean of all configured eval metrics as the objective. Ing
 
 ```bash
 noid-rag info
+```
+
+### `reset` — Reset the vector store
+
+```bash
+noid-rag reset                   # Drop table (with confirmation prompt)
+noid-rag reset --yes             # Skip confirmation
 ```
 
 ## Python API
