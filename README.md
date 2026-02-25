@@ -49,6 +49,21 @@ pip install .
 uv sync --extra local
 ```
 
+### OCR Support (optional)
+
+[Docling](https://github.com/DS4SD/docling) is installed automatically and handles document parsing. For OCR on scanned PDFs, install one of the supported engines:
+
+```bash
+# EasyOCR (default, GPU-accelerated)
+pip install easyocr
+
+# Or Tesseract
+brew install tesseract          # macOS
+sudo apt install tesseract-ocr  # Ubuntu/Debian
+```
+
+Set `ocr_engine` in your config to `easyocr` (default) or `tesseract`.
+
 ## Configuration
 
 noid-rag loads settings from environment variables and an optional YAML config file.
