@@ -18,19 +18,22 @@ def parse(source: str | Path, config: ParserConfig | None = None) -> Document:
     source = Path(source)
 
     from docling.datamodel.base_models import InputFormat
-    from docling.datamodel.pipeline_options import (
-        EasyOcrOptions,
-        TesseractOcrOptions,
-    )
     from docling.document_converter import DocumentConverter, PdfFormatOption
 
     # Configure PDF format option with OCR settings
     pdf_format_option = PdfFormatOption()
     if config.ocr_enabled:
-        if config.ocr_engine == "tesseract":
-            pdf_format_option.pipeline_options.ocr_options = TesseractOcrOptions()
-        else:
+        if config.ocr_engine == "easyocr":
+            from docling.datamodel.pipeline_options import EasyOcrOptions
+
             pdf_format_option.pipeline_options.ocr_options = EasyOcrOptions()
+        elif config.ocr_engine == "tesseract":
+            from docling.datamodel.pipeline_options import TesseractOcrOptions
+
+            pdf_format_option.pipeline_options.ocr_options = TesseractOcrOptions()
+        # else: "auto" — keep Docling's default OcrAutoOptions
+    else:
+        pdf_format_option.pipeline_options.do_ocr = False
 
     format_options = {
         InputFormat.PDF: pdf_format_option,

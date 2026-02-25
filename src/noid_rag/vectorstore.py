@@ -313,6 +313,12 @@ class PgVectorStore:
             for row in rows
         ]
 
+    async def drop(self) -> None:
+        """Drop the table and all its indexes."""
+        table = self.config.table_name
+        async with self._engine.begin() as conn:
+            await conn.execute(text(f"DROP TABLE IF EXISTS {table}"))
+
     async def delete(self, document_id: str) -> int:
         """Delete all chunks for a document. Returns count of deleted rows."""
         table = self.config.table_name

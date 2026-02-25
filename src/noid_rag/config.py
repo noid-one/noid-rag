@@ -15,7 +15,7 @@ _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 
 class ParserConfig(BaseModel):
     ocr_enabled: bool = True
-    ocr_engine: str = "easyocr"
+    ocr_engine: Literal["easyocr", "tesseract", "auto"] = "easyocr"
     max_pages: int = 0  # 0 = no limit
 
 

@@ -109,11 +109,22 @@ class NoidRag:
             progress_callback=progress_callback,
         )
 
+    def reset(self) -> None:
+        """Drop the vector store table so it can be recreated on next ingest."""
+        asyncio.run(self.areset())
+
     def batch(self, directory: str | Path, pattern: str = "*") -> dict[str, Any]:
         """Batch process a directory."""
         return asyncio.run(self.abatch(directory, pattern=pattern))
 
     # --- Async API ---
+
+    async def areset(self) -> None:
+        """Async: drop the vector store table."""
+        from noid_rag.vectorstore import PgVectorStore
+
+        async with PgVectorStore(config=self.settings.vectorstore) as store:
+            await store.drop()
 
     async def aingest(self, source: str | Path) -> dict[str, Any]:
         """Async: parse, chunk, embed, and store."""
