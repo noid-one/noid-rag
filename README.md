@@ -8,6 +8,8 @@ Production RAG CLI and Python library. Parse documents, chunk them, generate emb
 - **Hybrid chunking** — structure-aware or fixed-size, with configurable token limits
 - **Embedding** via any OpenAI-compatible API (OpenRouter, OpenAI, local)
 - **PostgreSQL + pgvector** storage with async connection pooling
+- **LLM answer synthesis** — search results fed to an LLM for grounded answers
+- **Hybrid search** — vector + keyword search with Reciprocal Rank Fusion (RRF)
 - **Batch processing** with progress bars, retry support, and error resilience
 - **Python API** (`NoidRag` class) with sync and async interfaces
 - **Configurable** via YAML, environment variables, or both
@@ -63,6 +65,9 @@ NOID_RAG_EMBEDDING__API_KEY=your-openrouter-api-key
 # PostgreSQL connection
 NOID_RAG_VECTORSTORE__DSN=postgresql+asyncpg://user:pass@localhost:5432/noid_rag
 
+# LLM API key (for answer synthesis)
+NOID_RAG_LLM__API_KEY=your-openrouter-api-key
+
 # Optional
 NOID_RAG_VERBOSE=false
 ```
@@ -85,14 +90,19 @@ chunker:
 embedding:
   provider: openrouter
   api_url: https://openrouter.ai/api/v1/embeddings
-  model: qwen/qwen3-embedding-8b
+  model: openai/text-embedding-3-small
   batch_size: 64
 
 vectorstore:
   dsn: postgresql+asyncpg://user:pass@localhost:5432/noid_rag
   table_name: documents
-  embedding_dim: 4096
+  embedding_dim: 1536
   pool_size: 20
+
+llm:
+  api_url: https://openrouter.ai/api/v1/chat/completions
+  model: openai/gpt-4o-mini
+  max_tokens: 1024
 
 batch:
   max_retries: 3
@@ -131,6 +141,7 @@ noid-rag ingest document.pdf
 ```bash
 noid-rag search "how does authentication work?"
 noid-rag search "deployment steps" --top-k 10
+noid-rag search "error handling" --no-answer   # Skip LLM, show raw results
 noid-rag search "error handling" --output results.json
 ```
 
@@ -170,6 +181,9 @@ result = rag.ingest("document.pdf")
 # Semantic search
 results = rag.search("your query", top_k=5)
 
+# Search + LLM answer synthesis
+answer = rag.answer("your query", top_k=5)
+
 # Batch process a directory
 result = rag.batch("./docs/", pattern="*.pdf")
 ```
@@ -185,6 +199,7 @@ rag = NoidRag()
 async def main():
     result = await rag.aingest("document.pdf")
     results = await rag.asearch("your query", top_k=5)
+    answer = await rag.aanswer("your query", top_k=5)
     batch_result = await rag.abatch("./docs/", pattern="*.pdf")
 
 asyncio.run(main())
@@ -199,14 +214,15 @@ rag = NoidRag({"embedding": {"model": "text-embedding-3-small"}})
 ## Architecture
 
 ```
-document → parse (Docling) → chunk (hybrid/fixed) → embed (API) → store (pgvector) → search
+document → parse (Docling) → chunk (hybrid/fixed) → embed (API) → store (pgvector) → search → answer (LLM)
 ```
 
 1. **Parse** — Docling converts PDF/DOCX/HTML to structured markdown
 2. **Chunk** — Hybrid (structure-aware) or fixed-size splitting with token limits
 3. **Embed** — Vectors generated via any OpenAI-compatible embeddings API
 4. **Store** — Chunks and vectors upserted into PostgreSQL with pgvector
-5. **Search** — Query embedded and matched against stored vectors via cosine similarity
+5. **Search** — Hybrid search (vector + keyword) with Reciprocal Rank Fusion
+6. **Answer** — LLM synthesizes a grounded answer from search results
 
 ## Development
 
