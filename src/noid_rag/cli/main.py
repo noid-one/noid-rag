@@ -3,6 +3,8 @@
 # Import command modules so @app.command() decorators register
 import noid_rag.cli.commands.batch  # noqa: F401, E402
 import noid_rag.cli.commands.chunk  # noqa: F401, E402
+import noid_rag.cli.commands.eval  # noqa: F401, E402
+import noid_rag.cli.commands.generate  # noqa: F401, E402
 import noid_rag.cli.commands.info  # noqa: F401, E402
 import noid_rag.cli.commands.ingest  # noqa: F401, E402
 import noid_rag.cli.commands.parse  # noqa: F401, E402

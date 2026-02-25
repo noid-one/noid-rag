@@ -61,3 +61,35 @@ class AnswerResult:
     answer: str
     sources: list[SearchResult]
     model: str
+
+
+@dataclass
+class EvalQuestion:
+    """A question from an evaluation dataset."""
+
+    question: str
+    ground_truth: str | None = None
+
+
+@dataclass
+class EvalResult:
+    """Evaluation result for a single question."""
+
+    question: str
+    answer: str
+    contexts: list[str]
+    ground_truth: str | None
+    scores: dict[str, float] = field(default_factory=dict)
+    passed: dict[str, bool] = field(default_factory=dict)
+
+
+@dataclass
+class EvalSummary:
+    """Aggregated evaluation results."""
+
+    results: list[EvalResult]
+    mean_scores: dict[str, float]
+    backend: str
+    model: str
+    total_questions: int
+    dataset_path: str

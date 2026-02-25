@@ -69,6 +69,21 @@ class BatchConfig(BaseModel):
     history_dir: str = "~/.noid-rag/history"
 
 
+class GenerateConfig(BaseModel):
+    model: str = "google/gemini-3.1-pro-preview"
+    num_questions: int = 20
+    questions_per_chunk: int = 3
+    strategy: Literal["random", "diverse"] = "diverse"
+
+
+class EvalConfig(BaseModel):
+    backend: Literal["ragas", "promptfoo"] = "ragas"
+    metrics: list[str] = ["faithfulness", "answer_relevancy", "context_precision"]
+    save_results: bool = True
+    results_dir: str = "~/.noid-rag/eval"
+    promptfoo_threshold: float = 0.7
+
+
 def _load_yaml_config(path: Path | None = None) -> dict[str, Any]:
     """Load config from YAML file."""
     if path is None:
@@ -94,6 +109,8 @@ class Settings(BaseSettings):
     vectorstore: VectorStoreConfig = Field(default_factory=VectorStoreConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     batch: BatchConfig = Field(default_factory=BatchConfig)
+    generate: GenerateConfig = Field(default_factory=GenerateConfig)
+    eval: EvalConfig = Field(default_factory=EvalConfig)
 
     config_file: Path | None = None
     verbose: bool = False

@@ -250,6 +250,62 @@ class PgVectorStore:
             for cid in sorted_ids
         ]
 
+    async def sample_chunks(
+        self,
+        limit: int = 10,
+        strategy: str = "diverse",
+    ) -> list[dict[str, Any]]:
+        """Sample chunks from the store.
+
+        Strategies:
+            random: ORDER BY RANDOM()
+            diverse: sample evenly across distinct document_ids
+        """
+        table = self.config.table_name
+        async with self._engine.connect() as conn:
+            if strategy == "random":
+                result = await conn.execute(
+                    text(f"""
+                        SELECT id, document_id, text, metadata
+                        FROM {table}
+                        ORDER BY RANDOM()
+                        LIMIT :limit
+                    """),
+                    {"limit": limit},
+                )
+            else:
+                # Diverse: rank rows within each document, then round-robin
+                result = await conn.execute(
+                    text(f"""
+                        WITH ranked AS (
+                            SELECT id, document_id, text, metadata,
+                                   ROW_NUMBER() OVER (
+                                       PARTITION BY document_id ORDER BY RANDOM()
+                                   ) AS rn
+                            FROM {table}
+                        )
+                        SELECT id, document_id, text, metadata
+                        FROM ranked
+                        ORDER BY rn, RANDOM()
+                        LIMIT :limit
+                    """),
+                    {"limit": limit},
+                )
+
+            rows = result.fetchall()
+
+        return [
+            {
+                "id": row.id,
+                "document_id": row.document_id,
+                "text": row.text,
+                "metadata": (
+                    json.loads(row.metadata) if isinstance(row.metadata, str) else row.metadata
+                ),
+            }
+            for row in rows
+        ]
+
     async def delete(self, document_id: str) -> int:
         """Delete all chunks for a document. Returns count of deleted rows."""
         table = self.config.table_name

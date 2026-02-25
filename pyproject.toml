@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "noid-rag"
-version = "0.1.1"
+version = "0.1.2"
 description = "Production RAG CLI & Agent Skill"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -26,7 +26,8 @@ dependencies = [
 
 [project.optional-dependencies]
 local = ["sentence-transformers>=3.0.0"]
-dev = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0", "pytest-cov>=5.0.0", "ruff>=0.4.0"]
+eval = ["ragas>=0.4.0"]
+dev = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0", "pytest-cov>=5.0.0", "ruff>=0.4.0", "pandas>=2.0.0"]
 
 [project.scripts]
 noid-rag = "noid_rag.cli.main:main"
