@@ -1,1 +1,27 @@
+# macOS
+.DS_Store
+
+# Claude Code
+.claude/
+
+# Environment variables
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+.venv/
+
+# Testing / linting caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Project-specific
 /docs/example
+/docs/data
