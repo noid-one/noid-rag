@@ -1,34 +1,111 @@
+# ──────────────────────────────────────────────────────
 # noid-rag configuration
-# Copy to ~/.noid-rag/config.yml
+# Copy to ~/.noid-rag/config.yml and edit to your needs
+# ──────────────────────────────────────────────────────
 
 parser:
+  # Enable OCR to extract text from scanned PDFs and images.
+  # Set to false if your documents are already text-based (faster).
   ocr_enabled: true
+
+  # Which OCR engine to use. "easyocr" works out of the box.
   ocr_engine: easyocr
+
+  # Maximum number of pages to process per document.
+  # 0 = no limit (process all pages). Useful for testing with large PDFs.
   max_pages: 0
 
 chunker:
+  # How to split documents into smaller pieces (chunks) for search.
+  #   "hybrid"  — (recommended) uses document structure (headings, paragraphs,
+  #               tables) to create semantically meaningful chunks. Requires
+  #               Docling-parsed documents.
+  #   "fixed"   — simple sliding-window: cuts text into equal-sized pieces.
+  #               Simpler but ignores document structure.
   method: hybrid
+
+  # Maximum size of each chunk, in tokens (roughly ¾ of a word each).
+  # Smaller chunks = more precise search results, but less context per chunk.
+  # Larger chunks  = more context, but search may be less focused.
+  #   Recommended: 256–512 for most embedding models.
+  #   Must stay within the embedding model's max input (8191 for text-embedding-3-small).
   max_tokens: 512
+
+  # The tokenizer to use when counting tokens for chunk sizes.
+  # Should match or approximate the embedding model's tokenizer.
   tokenizer: BAAI/bge-small-en-v1.5
-  overlap: 50  # token overlap for fixed chunking method
+
+  # (Only used with method: fixed)
+  # How many tokens of overlap between consecutive chunks.
+  # Overlap prevents information from being "cut" at chunk boundaries.
+  # Example with max_tokens=512 and overlap=50:
+  #   Chunk 1: tokens 0–511
+  #   Chunk 2: tokens 462–973  (starts 50 tokens before the end of Chunk 1)
+  # Higher overlap = better continuity but more chunks (more storage & slower).
+  # Recommended: 10–15% of max_tokens.
+  overlap: 50
 
 embedding:
+  # The API provider for converting text into numeric vectors (embeddings).
   provider: openrouter
+
+  # The endpoint URL for the embeddings API (OpenAI-compatible).
   api_url: https://openrouter.ai/api/v1/embeddings
+
+  # Which embedding model to use. This converts your text chunks into vectors
+  # that can be compared for similarity.
+  #   "openai/text-embedding-3-small" — good balance of quality, speed & cost.
+  #     Outputs 1536-dimensional vectors.
+  #   "openai/text-embedding-3-large" — higher quality, outputs 3072 dimensions,
+  #     but slower and more expensive. Change embedding_dim to 3072 if you use this.
   model: openai/text-embedding-3-small
+
+  # How many text chunks to send per API call.
+  # Higher = fewer API calls (faster), but uses more memory.
+  # Lower  = more API calls (slower), but safer with rate limits.
+  # 64 is a safe default for most providers.
   batch_size: 64
 
 vectorstore:
+  # PostgreSQL connection string. Requires the pgvector extension installed.
+  # Format: postgresql+asyncpg://USER:PASSWORD@HOST:PORT/DATABASE
   dsn: postgresql+asyncpg://user:pass@localhost:5432/noid_rag
+
+  # Name of the database table where chunks and their embeddings are stored.
   table_name: documents
+
+  # The number of dimensions in each embedding vector.
+  # ⚠️  MUST match the output of your chosen embedding model:
+  #   text-embedding-3-small → 1536
+  #   text-embedding-3-large → 3072
+  # If this doesn't match, searches will fail or return garbage results.
   embedding_dim: 1536
+
+  # Number of database connections kept open and ready to use.
+  # Think of it like checkout lanes at a store — more lanes means more
+  # simultaneous operations, but each uses server memory.
+  # 5–10 is fine for personal use. Increase for heavy concurrent workloads.
   pool_size: 20
 
 llm:
+  # The endpoint URL for the chat completions API (OpenAI-compatible).
   api_url: https://openrouter.ai/api/v1/chat/completions
+
+  # Which LLM generates the final answer from the retrieved chunks.
+  # "openai/gpt-4o-mini" is fast and cheap. You can swap for any model
+  # available on your provider (e.g., "anthropic/claude-sonnet-4" for
+  # higher quality answers).
   model: openai/gpt-4o-mini
+
+  # Maximum number of tokens the LLM can generate in its answer.
+  # 1024 ≈ ~750 words. Increase if you need longer answers.
+  # This does NOT affect input — only the length of the response.
   max_tokens: 1024
 
 batch:
+  # How many times to retry a failed operation (e.g., API timeout).
   max_retries: 3
+
+  # If one file fails during batch processing, keep going with the rest.
+  # Set to false to stop immediately on first error.
   continue_on_error: true
