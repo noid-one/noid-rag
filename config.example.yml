@@ -184,3 +184,13 @@ tune:
       # ⚠️  Different embedding models require re-ingestion (new vectors),
       #     but Optuna caches ingestion — same model+chunker combo is ingested once.
       model: [openai/text-embedding-3-small, openai/text-embedding-3-large]
+
+  # Metric weights for the composite optimization score.
+  # When set, Optuna's objective uses a weighted mean instead of a simple mean.
+  # Metrics not listed here default to weight 1.0.
+  # Tip: context_precision benefits from ground_truth in your eval dataset —
+  # include a "ground_truth" field in each question for best results.
+  # metric_weights:
+  #   context_precision: 2.0
+  #   faithfulness: 1.0
+  #   answer_relevancy: 1.0

@@ -83,11 +83,28 @@ def _apply_trial_params(
     return base_settings.model_copy(update=updates)
 
 
-def _compute_composite_score(mean_scores: dict[str, float]) -> float:
-    """Composite score = mean of all metric means."""
+def _compute_composite_score(
+    mean_scores: dict[str, float],
+    weights: dict[str, float] | None = None,
+) -> float:
+    """Composite score = weighted mean of all metric means.
+
+    When *weights* is empty or ``None``, all metrics are weighted equally
+    (backward-compatible default).  Otherwise each metric is scaled by its
+    weight (defaulting to 1.0 for unlisted metrics) and the result is
+    normalised by the total weight.
+    """
     if not mean_scores:
         return 0.0
-    return sum(mean_scores.values()) / len(mean_scores)
+    if not weights:
+        return sum(mean_scores.values()) / len(mean_scores)
+    total = 0.0
+    weight_sum = 0.0
+    for metric, score in mean_scores.items():
+        w = weights.get(metric, 1.0)
+        total += score * w
+        weight_sum += w
+    return total / weight_sum if weight_sum else 0.0
 
 
 async def _cleanup_tables(table_names: list[str], dsn: str) -> None:
@@ -105,14 +122,10 @@ async def _cleanup_tables(table_names: list[str], dsn: str) -> None:
                 # a validated base name + '_tune_' + 8-char hex digest, so this should
                 # never fail in practice, but we guard explicitly to be safe.
                 if not _SAFE_TABLE_RE.match(table_name):
-                    logger.warning(
-                        "Skipping unsafe table name during cleanup: %r", table_name
-                    )
+                    logger.warning("Skipping unsafe table name during cleanup: %r", table_name)
                     continue
                 # Safe: table_name validated by _SAFE_TABLE_RE guard above.
-                await conn.execute(
-                    sqlalchemy.text(f"DROP TABLE IF EXISTS {table_name}")
-                )
+                await conn.execute(sqlalchemy.text(f"DROP TABLE IF EXISTS {table_name}"))
                 dropped += 1
         logger.info("Cleaned up %d temporary tables", dropped)
     finally:
@@ -145,9 +158,7 @@ def run_tune(
 
     search_space = settings.tune.search_space
     if not search_space:
-        raise ValueError(
-            "No search space defined. Set tune.search_space in your config YAML."
-        )
+        raise ValueError("No search space defined. Set tune.search_space in your config YAML.")
 
     max_trials = settings.tune.max_trials
     ingest_cache: dict[str, str] = {}  # hash -> table_name
@@ -174,15 +185,11 @@ def run_tune(
 
         # Determine ingest cache key
         chunker_params = trial_params.get("chunker", {})
-        embedding_model = trial_params.get("embedding", {}).get(
-            "model", settings.embedding.model
-        )
+        embedding_model = trial_params.get("embedding", {}).get("model", settings.embedding.model)
         cache_key = _ingest_config_hash(chunker_params, embedding_model)
 
         # Resolve embedding dimension and check HNSW compatibility
-        embedding_dim = EMBEDDING_DIM_MAP.get(
-            embedding_model, settings.vectorstore.embedding_dim
-        )
+        embedding_dim = EMBEDDING_DIM_MAP.get(embedding_model, settings.vectorstore.embedding_dim)
         if embedding_dim > _HNSW_MAX_DIM:
             raise optuna.TrialPruned(
                 f"Embedding model {embedding_model!r} produces {embedding_dim} dimensions, "
@@ -217,14 +224,16 @@ def run_tune(
 
         # Evaluate
         summary = asyncio.run(rag.aeval(dataset_path))
-        score = _compute_composite_score(summary.mean_scores)
+        score = _compute_composite_score(summary.mean_scores, settings.tune.metric_weights or None)
 
-        all_trials.append({
-            "trial_number": trial.number,
-            "params": trial_params,
-            "score": score,
-            "metric_scores": dict(summary.mean_scores),
-        })
+        all_trials.append(
+            {
+                "trial_number": trial.number,
+                "params": trial_params,
+                "score": score,
+                "metric_scores": dict(summary.mean_scores),
+            }
+        )
 
         if progress_callback:
             best_so_far = max(t["score"] for t in all_trials)

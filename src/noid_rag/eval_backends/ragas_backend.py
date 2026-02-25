@@ -24,14 +24,21 @@ _METRIC_PROMPTS = {
         "Question: {question} Response: {response}"
     ),
     "context_precision": (
-        "Rate 0.0–1.0 how relevant the retrieved context is to the question. "
-        "Question: {question} Context: {context}"
+        "Rate 0.0–1.0 how much of the retrieved context contains information "
+        "needed to produce the reference answer. "
+        "Question: {question} Reference answer: {reference} Context: {context}"
     ),
     "context_recall": (
         "Rate 0.0–1.0 how well the context covers the reference answer. "
         "Reference: {reference} Context: {context}"
     ),
 }
+
+# Fallback prompt when ground_truth is empty — question-only relevance check.
+_CONTEXT_PRECISION_FALLBACK = (
+    "Rate 0.0–1.0 how relevant the retrieved context is to the question. "
+    "Question: {question} Context: {context}"
+)
 
 # Environment variable used to pass the API key to the eval subprocess.
 # Never written to disk — passed only through the process environment.
@@ -51,18 +58,31 @@ def _build_eval_script(
 
     The API key is NOT embedded in the script; the subprocess inherits it from
     the ``NOID_RAG_EVAL_API_KEY`` environment variable set by the caller.
+
+    ``context_precision`` uses per-chunk evaluation: each chunk is scored
+    individually against the reference answer and the final score is the mean.
+    When ground_truth is empty, a question-only fallback prompt is used.
+    Other metrics evaluate against the joined context as before.
     """
     # Filter to known metrics
     known = [m for m in metrics if m in _METRIC_PROMPTS]
 
+    # Build metric definitions — context_precision uses a separate code path
+    other_metrics = [m for m in known if m != "context_precision"]
+    has_context_precision = "context_precision" in known
+
     metric_defs = []
-    for m in known:
+    for m in other_metrics:
         prompt = _METRIC_PROMPTS[m]
         metric_defs.append(
             f'    NumericMetric(name="{m}", allowed_values=(0.0, 1.0),\n'
             f'                  prompt="{prompt}"),'
         )
     metrics_block = "\n".join(metric_defs)
+
+    # Context precision prompts (with-reference and fallback)
+    cp_prompt = _METRIC_PROMPTS["context_precision"]
+    cp_fallback = _CONTEXT_PRECISION_FALLBACK
 
     lines = [
         "import asyncio",
@@ -93,10 +113,32 @@ def _build_eval_script(
         metrics_block,
         "]",
         "",
+        f"HAS_CONTEXT_PRECISION = {has_context_precision!r}",
+        f"CP_PROMPT = {cp_prompt!r}",
+        f"CP_FALLBACK = {cp_fallback!r}",
+        f"JUDGE_MAX_TOKENS = {judge_max_tokens!r}",
+        f"JUDGE_TEMPERATURE = {judge_temperature!r}",
+        "",
         "SYSTEM_PROMPT = (",
         '    "You are an evaluation judge. '
         'Respond with ONLY a decimal number between 0.0 and 1.0."',
         ")",
+        "",
+        "",
+        "async def score_prompt(client, prompt_text, max_tokens, temperature):",
+        '    """Call the LLM judge and return a 0.0–1.0 score."""',
+        "    resp = await client.chat.completions.create(",
+        "        model=MODEL,",
+        "        messages=[",
+        '            {"role": "system", "content": SYSTEM_PROMPT},',
+        '            {"role": "user", "content": prompt_text},',
+        "        ],",
+        "        max_tokens=max_tokens,",
+        "        temperature=temperature,",
+        "    )",
+        "    text = resp.choices[0].message.content.strip()",
+        "    score = float(text)",
+        "    return max(0.0, min(1.0, score))",
         "",
         "",
         "async def main():",
@@ -108,30 +150,60 @@ def _build_eval_script(
         "",
         "    for row in data:",
         "        row_scores = {}",
+        "        question = row.get('question', '')",
+        "        response = row.get('answer', '')",
+        "        contexts = row.get('contexts', [])",
+        "        reference = row.get('ground_truth') or ''",
+        "        joined_context = ' '.join(contexts)",
+        "",
+        "        # Score non-context_precision metrics (joined context)",
         "        for metric in metrics:",
         "            prompt = metric.prompt.format(",
-        '                question=row.get("question", ""),',
-        '                response=row.get("answer", ""),',
-        '                context=" ".join(row.get("contexts", [])),',
-        '                reference=row.get("ground_truth") or "",',
+        "                question=question,",
+        "                response=response,",
+        "                context=joined_context,",
+        "                reference=reference,",
         "            )",
         "            try:",
-        "                resp = await client.chat.completions.create(",
-        "                    model=MODEL,",
-        "                    messages=[",
-        '                        {"role": "system", "content": SYSTEM_PROMPT},',
-        '                        {"role": "user", "content": prompt},',
-        "                    ],",
-        f"                    max_tokens={judge_max_tokens!r},",
-        f"                    temperature={judge_temperature!r},",
+        "                score = await score_prompt(",
+        "                    client, prompt, JUDGE_MAX_TOKENS, JUDGE_TEMPERATURE",
         "                )",
-        "                text = resp.choices[0].message.content.strip()",
-        "                score = float(text)",
-        "                score = max(0.0, min(1.0, score))",
         "            except Exception as exc:",
         "                print(f'Eval error for {metric.name}: {exc}', file=sys.stderr)",
         "                score = 0.0",
         "            row_scores[metric.name] = score",
+        "",
+        "        # Per-chunk context_precision scoring",
+        "        if HAS_CONTEXT_PRECISION:",
+        "            if not contexts:",
+        "                row_scores['context_precision'] = 0.0",
+        "            else:",
+        "                chunk_scores = []",
+        "                for chunk in contexts:",
+        "                    if reference:",
+        "                        prompt = CP_PROMPT.format(",
+        "                            question=question,",
+        "                            reference=reference,",
+        "                            context=chunk,",
+        "                        )",
+        "                    else:",
+        "                        prompt = CP_FALLBACK.format(",
+        "                            question=question,",
+        "                            context=chunk,",
+        "                        )",
+        "                    try:",
+        "                        s = await score_prompt(",
+        "                            client, prompt, JUDGE_MAX_TOKENS, JUDGE_TEMPERATURE",
+        "                        )",
+        "                    except Exception as exc:",
+        "                        print(",
+        "                            f'Eval error for context_precision chunk: {exc}',",
+        "                            file=sys.stderr,",
+        "                        )",
+        "                        s = 0.0",
+        "                    chunk_scores.append(s)",
+        "                row_scores['context_precision'] = sum(chunk_scores) / len(chunk_scores)",
+        "",
         "        results.append(row_scores)",
         "",
         '    with open(OUTPUT_PATH, "w") as f:',

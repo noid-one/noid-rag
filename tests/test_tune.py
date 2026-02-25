@@ -135,6 +135,36 @@ def test_composite_score_empty():
     assert _compute_composite_score({}) == 0.0
 
 
+def test_composite_score_weighted():
+    from noid_rag.tune import _compute_composite_score
+
+    scores = {"faithfulness": 0.8, "context_precision": 0.4}
+    weights = {"context_precision": 2.0, "faithfulness": 1.0}
+    # weighted = (0.8*1.0 + 0.4*2.0) / (1.0 + 2.0) = 1.6 / 3.0
+    expected = 1.6 / 3.0
+    assert abs(_compute_composite_score(scores, weights) - expected) < 1e-9
+
+
+def test_composite_score_weighted_missing_metric_defaults_to_1():
+    """Metrics not listed in weights default to weight=1.0."""
+    from noid_rag.tune import _compute_composite_score
+
+    scores = {"faithfulness": 0.6, "answer_relevancy": 0.8}
+    weights = {"faithfulness": 3.0}  # answer_relevancy defaults to 1.0
+    # weighted = (0.6*3.0 + 0.8*1.0) / (3.0 + 1.0) = 2.6 / 4.0
+    expected = 2.6 / 4.0
+    assert abs(_compute_composite_score(scores, weights) - expected) < 1e-9
+
+
+def test_composite_score_no_weights_is_equal():
+    """Passing None or empty weights gives equal weighting (backward compat)."""
+    from noid_rag.tune import _compute_composite_score
+
+    scores = {"faithfulness": 0.8, "answer_relevancy": 0.6}
+    assert _compute_composite_score(scores, None) == _compute_composite_score(scores)
+    assert _compute_composite_score(scores, {}) == _compute_composite_score(scores)
+
+
 # --- Ingest caching ---
 
 
@@ -167,9 +197,7 @@ def test_ingest_caching():
 
     with patch("noid_rag.api.NoidRag") as mock_rag_cls:
         instance = MagicMock()
-        instance.aingest = AsyncMock(
-            return_value={"chunks_stored": 5, "document_id": "doc_test"}
-        )
+        instance.aingest = AsyncMock(return_value={"chunks_stored": 5, "document_id": "doc_test"})
         instance.aeval = AsyncMock(return_value=mock_summary)
         mock_rag_cls.return_value = instance
 
@@ -199,9 +227,7 @@ async def test_cleanup_tables():
     mock_engine.begin = mock_begin
     mock_engine.dispose = AsyncMock()
 
-    with patch(
-        "sqlalchemy.ext.asyncio.create_async_engine", return_value=mock_engine
-    ):
+    with patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=mock_engine):
         await _cleanup_tables(
             ["docs_tune_abc12345", "docs_tune_def67890"],
             "postgresql+asyncpg://test",
@@ -228,9 +254,7 @@ async def test_cleanup_tables_skips_unsafe_names():
     mock_engine.begin = mock_begin
     mock_engine.dispose = AsyncMock()
 
-    with patch(
-        "sqlalchemy.ext.asyncio.create_async_engine", return_value=mock_engine
-    ):
+    with patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=mock_engine):
         await _cleanup_tables(
             # safe name, unsafe name (contains semicolon), safe name
             ["docs_tune_abc12345", "bad; DROP TABLE users; --", "docs_tune_def67890"],
@@ -322,9 +346,7 @@ def test_run_tune_e2e():
 
     with patch("noid_rag.api.NoidRag") as mock_rag_cls:
         instance = MagicMock()
-        instance.aingest = AsyncMock(
-            return_value={"chunks_stored": 5, "document_id": "doc_test"}
-        )
+        instance.aingest = AsyncMock(return_value={"chunks_stored": 5, "document_id": "doc_test"})
         instance.aeval = AsyncMock(return_value=mock_summary)
         mock_rag_cls.return_value = instance
 
@@ -333,9 +355,7 @@ def test_run_tune_e2e():
         def on_progress(trial_num, total, best):
             progress_calls.append((trial_num, total, best))
 
-        result = run_tune(
-            "test.yml", ["doc1.pdf"], settings, progress_callback=on_progress
-        )
+        result = run_tune("test.yml", ["doc1.pdf"], settings, progress_callback=on_progress)
 
     assert isinstance(result, TuneResult)
     assert result.total_trials == 3
@@ -373,9 +393,7 @@ def test_missing_optuna_raises():
 
     with patch.dict(sys.modules, {"optuna": None}):
         with pytest.raises(ImportError, match="optuna is required"):
-            with patch(
-                "builtins.__import__", side_effect=_mock_import_no_optuna
-            ):
+            with patch("builtins.__import__", side_effect=_mock_import_no_optuna):
                 run_tune("test.yml", ["doc.pdf"], settings)
 
 
@@ -439,6 +457,38 @@ def test_tune_config_max_trials_positive_accepted():
     assert cfg.max_trials == 1
 
 
+def test_tune_config_metric_weights():
+    from noid_rag.config import TuneConfig
+
+    cfg = TuneConfig(metric_weights={"context_precision": 2.0, "faithfulness": 1.0})
+    assert cfg.metric_weights == {"context_precision": 2.0, "faithfulness": 1.0}
+
+
+def test_tune_config_metric_weights_default_empty():
+    from noid_rag.config import TuneConfig
+
+    cfg = TuneConfig()
+    assert cfg.metric_weights == {}
+
+
+def test_tune_config_metric_weights_rejects_negative():
+    from pydantic import ValidationError
+
+    from noid_rag.config import TuneConfig
+
+    with pytest.raises(ValidationError, match="must be > 0"):
+        TuneConfig(metric_weights={"context_precision": -1.0})
+
+
+def test_tune_config_metric_weights_rejects_zero():
+    from pydantic import ValidationError
+
+    from noid_rag.config import TuneConfig
+
+    with pytest.raises(ValidationError, match="must be > 0"):
+        TuneConfig(metric_weights={"faithfulness": 0.0})
+
+
 # --- Table name length guard ---
 
 
@@ -457,9 +507,7 @@ def test_long_table_name_raises_before_first_trial():
                     "search_space": {"search": {"top_k": [3, 5]}},
                 }
             ),
-            "vectorstore": settings.vectorstore.model_copy(
-                update={"table_name": "a" * 50}
-            ),
+            "vectorstore": settings.vectorstore.model_copy(update={"table_name": "a" * 50}),
         }
     )
 
@@ -502,14 +550,22 @@ def test_hnsw_dim_limit_prunes_trial():
     )
 
     # Use GridSampler to deterministically test both models
-    with patch("noid_rag.api.NoidRag") as mock_rag_cls, \
-         patch("optuna.samplers.TPESampler", return_value=optuna.samplers.GridSampler(
-             {"embedding.model": ["openai/text-embedding-3-small", "openai/text-embedding-3-large"]}
-         )):
+    with (
+        patch("noid_rag.api.NoidRag") as mock_rag_cls,
+        patch(
+            "optuna.samplers.TPESampler",
+            return_value=optuna.samplers.GridSampler(
+                {
+                    "embedding.model": [
+                        "openai/text-embedding-3-small",
+                        "openai/text-embedding-3-large",
+                    ]
+                }
+            ),
+        ),
+    ):
         instance = MagicMock()
-        instance.aingest = AsyncMock(
-            return_value={"chunks_stored": 5, "document_id": "doc_test"}
-        )
+        instance.aingest = AsyncMock(return_value={"chunks_stored": 5, "document_id": "doc_test"})
         instance.aeval = AsyncMock(return_value=mock_summary)
         mock_rag_cls.return_value = instance
 
@@ -537,9 +593,7 @@ def test_table_name_at_max_length_is_accepted():
                     "search_space": {"search": {"top_k": [5]}},
                 }
             ),
-            "vectorstore": settings.vectorstore.model_copy(
-                update={"table_name": "a" * 49}
-            ),
+            "vectorstore": settings.vectorstore.model_copy(update={"table_name": "a" * 49}),
         }
     )
 

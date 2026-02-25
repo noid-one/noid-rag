@@ -115,6 +115,18 @@ class EvalConfig(BaseModel):
 class TuneConfig(BaseModel):
     max_trials: int = Field(default=30, gt=0)
     search_space: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    metric_weights: dict[str, float] = Field(default_factory=dict)
+
+    @field_validator("metric_weights")
+    @classmethod
+    def _validate_weights_positive(cls, v: dict[str, float]) -> dict[str, float]:
+        for metric, w in v.items():
+            if w <= 0.0:
+                raise ValueError(
+                    f"metric_weights[{metric!r}] must be > 0, got {w}. "
+                    "Use a small positive value to de-emphasize a metric."
+                )
+        return v
 
 
 def _load_yaml_config(path: Path | None = None) -> dict[str, Any]:

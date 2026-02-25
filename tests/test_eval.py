@@ -259,6 +259,55 @@ class TestRagasBackend:
         # Should be valid Python
         compile(script, "<eval_script>", "exec")
 
+    def test_build_eval_script_context_precision_prompt(self):
+        """context_precision prompt should reference the reference answer."""
+        from noid_rag.eval_backends.ragas_backend import _build_eval_script
+
+        script = _build_eval_script(
+            data_path="/tmp/data.json",
+            output_path="/tmp/results.json",
+            metrics=["context_precision"],
+            api_url="https://api.example.com/v1",
+            model="test-model",
+        )
+        # The prompt should mention reference answer
+        assert "Reference answer:" in script
+        assert "HAS_CONTEXT_PRECISION = True" in script
+        # Per-chunk scoring loop
+        assert "for chunk in contexts" in script
+        # Fallback for empty ground_truth
+        assert "CP_FALLBACK" in script
+        compile(script, "<eval_script>", "exec")
+
+    def test_build_eval_script_no_context_precision(self):
+        """When context_precision is not requested, per-chunk logic is disabled."""
+        from noid_rag.eval_backends.ragas_backend import _build_eval_script
+
+        script = _build_eval_script(
+            data_path="/tmp/data.json",
+            output_path="/tmp/results.json",
+            metrics=["faithfulness"],
+            api_url="https://api.example.com/v1",
+            model="test-model",
+        )
+        assert "HAS_CONTEXT_PRECISION = False" in script
+        compile(script, "<eval_script>", "exec")
+
+    def test_context_precision_fallback_prompt(self):
+        """When ground_truth is empty, fallback prompt is question-only."""
+        from noid_rag.eval_backends.ragas_backend import (
+            _CONTEXT_PRECISION_FALLBACK,
+            _METRIC_PROMPTS,
+        )
+
+        # Fallback prompt should NOT contain {reference}
+        assert "{reference}" not in _CONTEXT_PRECISION_FALLBACK
+        assert "{question}" in _CONTEXT_PRECISION_FALLBACK
+        assert "{context}" in _CONTEXT_PRECISION_FALLBACK
+
+        # Main prompt SHOULD contain {reference}
+        assert "{reference}" in _METRIC_PROMPTS["context_precision"]
+
     def test_parse_ragas_results(self, tmp_path):
         from noid_rag.eval_backends.ragas_backend import _parse_ragas_results
 
