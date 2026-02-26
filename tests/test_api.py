@@ -67,10 +67,10 @@ class TestNoidRagChunk:
 
 class TestNoidRagIngest:
     @pytest.mark.asyncio
-    @patch("noid_rag.vectorstore.PgVectorStore")
+    @patch("noid_rag.vectorstore_factory.create_vectorstore")
     @patch("noid_rag.chunker.chunk")
     @patch("noid_rag.parser.parse")
-    async def test_aingest_runs_full_pipeline(self, mock_parse, mock_chunk, mock_store_cls):
+    async def test_aingest_runs_full_pipeline(self, mock_parse, mock_chunk, mock_create_vs):
         # Set up parser
         mock_doc = Document(id="doc_test", source="/tmp/test.pdf", content="# Test")
         mock_parse.return_value = mock_doc
@@ -91,7 +91,7 @@ class TestNoidRagIngest:
         mock_store.replace_document.return_value = (1, 2)
         mock_store.__aenter__ = AsyncMock(return_value=mock_store)
         mock_store.__aexit__ = AsyncMock(return_value=False)
-        mock_store_cls.return_value = mock_store
+        mock_create_vs.return_value = mock_store
 
         rag = NoidRag()
         rag._embed_client = mock_embed
@@ -106,8 +106,8 @@ class TestNoidRagIngest:
 
 class TestNoidRagSearch:
     @pytest.mark.asyncio
-    @patch("noid_rag.vectorstore.PgVectorStore")
-    async def test_asearch_embeds_query_and_searches(self, mock_store_cls):
+    @patch("noid_rag.vectorstore_factory.create_vectorstore")
+    async def test_asearch_embeds_query_and_searches(self, mock_create_vs):
         # Set up embedding client (mock)
         mock_embed = AsyncMock()
         query_embedding = [0.1] * 10
@@ -127,7 +127,7 @@ class TestNoidRagSearch:
         mock_store.hybrid_search.return_value = expected_results
         mock_store.__aenter__ = AsyncMock(return_value=mock_store)
         mock_store.__aexit__ = AsyncMock(return_value=False)
-        mock_store_cls.return_value = mock_store
+        mock_create_vs.return_value = mock_store
 
         rag = NoidRag()
         rag._embed_client = mock_embed

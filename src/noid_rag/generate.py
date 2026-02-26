@@ -13,7 +13,7 @@ import httpx
 import yaml
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential_jitter
 
-from noid_rag.config import LLMConfig, Settings, VectorStoreConfig
+from noid_rag.config import LLMConfig, Settings
 
 logger = logging.getLogger(__name__)
 
@@ -41,14 +41,14 @@ Respond with ONLY a JSON array, no other text:
 
 
 async def fetch_chunks(
-    store_config: VectorStoreConfig,
+    settings: Settings,
     num_chunks: int,
     strategy: Literal["random", "diverse"] = "diverse",
 ) -> list[dict[str, Any]]:
-    """Pull chunks from pgvector using the specified strategy."""
-    from noid_rag.vectorstore import PgVectorStore
+    """Pull chunks from the vector store using the specified strategy."""
+    from noid_rag.vectorstore_factory import create_vectorstore
 
-    async with PgVectorStore(config=store_config) as store:
+    async with create_vectorstore(settings) as store:
         return await store.sample_chunks(limit=num_chunks, strategy=strategy)
 
 
@@ -56,7 +56,7 @@ async def fetch_chunks(
     stop=stop_after_attempt(3),
     wait=wait_exponential_jitter(initial=2, max=60),
     retry=retry_if_exception_type(
-        (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException)
+        (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException, json.JSONDecodeError)
     ),
 )
 async def _call_llm(
@@ -225,7 +225,7 @@ async def run_generate(
     if num_chunks is None:
         num_chunks = max(1, -(-final_num_questions // qpc))  # ceil division
 
-    chunks = await fetch_chunks(settings.vectorstore, num_chunks, final_strategy)  # type: ignore[arg-type]
+    chunks = await fetch_chunks(settings, num_chunks, final_strategy)  # type: ignore[arg-type]
 
     if not chunks:
         raise RuntimeError("No chunks found in the vector store. Ingest documents first.")

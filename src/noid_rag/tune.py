@@ -115,29 +115,54 @@ def _compute_composite_score(
     return total / weight_sum if weight_sum else 0.0
 
 
-async def _cleanup_tables(table_names: list[str], dsn: str) -> None:
-    """Drop all temporary tuning tables (used on error/abort)."""
-    import sqlalchemy
-    from sqlalchemy.ext.asyncio import create_async_engine
+async def _cleanup_stores(store_names: list[str], settings: Settings) -> None:
+    """Drop all temporary tuning stores (used on error/abort).
 
-    engine = create_async_engine(dsn)
-    dropped = 0
-    try:
-        async with engine.begin() as conn:
-            for table_name in table_names:
-                # Validate each name before interpolating into raw SQL — same rule as
-                # VectorStoreConfig._validate_table_name.  Names are constructed from
-                # a validated base name + '_tune_' + 8-char hex digest, so this should
-                # never fail in practice, but we guard explicitly to be safe.
-                if not _SAFE_TABLE_RE.match(table_name):
-                    logger.warning("Skipping unsafe table name during cleanup: %r", table_name)
+    Dispatches by provider: pgvector uses raw SQL DROP TABLE,
+    qdrant deletes collections via the client.
+    """
+    provider = settings.vectorstore.provider
+
+    if provider == "qdrant":
+        from noid_rag.config import _SAFE_COLLECTION_RE
+        from noid_rag.vectorstore_qdrant import make_raw_client
+
+        client = None
+        try:
+            client = make_raw_client(settings.qdrant)
+            dropped = 0
+            for name in store_names:
+                if not _SAFE_COLLECTION_RE.match(name):
+                    logger.warning(
+                        "Skipping unsafe collection name during cleanup: %r", name
+                    )
                     continue
-                # Safe: table_name validated by _SAFE_TABLE_RE guard above.
-                await conn.execute(sqlalchemy.text(f"DROP TABLE IF EXISTS {table_name}"))
-                dropped += 1
-        logger.info("Cleaned up %d temporary tables", dropped)
-    finally:
-        await engine.dispose()
+                if await client.collection_exists(name):
+                    await client.delete_collection(name)
+                    dropped += 1
+            logger.info("Cleaned up %d temporary collections", dropped)
+        finally:
+            if client is not None:
+                await client.close()
+    else:
+        from sqlalchemy import text as sa_text
+        from sqlalchemy.ext.asyncio import create_async_engine
+
+        engine = create_async_engine(settings.vectorstore.dsn)
+        dropped = 0
+        try:
+            async with engine.begin() as conn:
+                for table_name in store_names:
+                    if not _SAFE_TABLE_RE.match(table_name):
+                        logger.warning(
+                            "Skipping unsafe table name during cleanup: %r", table_name
+                        )
+                        continue
+                    await conn.execute(sa_text(f"DROP TABLE IF EXISTS {table_name}"))
+                    dropped += 1
+            logger.info("Cleaned up %d temporary tables", dropped)
+        finally:
+            await engine.dispose()
 
 
 def _setup_trial(
@@ -162,28 +187,41 @@ def _setup_trial(
     embedding_model = trial_params.get("embedding", {}).get("model", settings.embedding.model)
     cache_key = _ingest_config_hash(chunker_params, embedding_model, parser_params)
 
-    # Resolve embedding dimension and check HNSW compatibility
+    # Resolve embedding dimension and check HNSW compatibility (pgvector only)
     embedding_dim = EMBEDDING_DIM_MAP.get(embedding_model, settings.vectorstore.embedding_dim)
-    if embedding_dim > _HNSW_MAX_DIM:
+    if settings.vectorstore.provider == "pgvector" and embedding_dim > _HNSW_MAX_DIM:
         raise optuna.TrialPruned(
             f"Embedding model {embedding_model!r} produces {embedding_dim} dimensions, "
             f"which exceeds pgvector's HNSW index limit of {_HNSW_MAX_DIM}. "
             "Pruning this trial."
         )
 
-    # Set up temp table
-    table_name = f"{base_table}_tune_{cache_key}"
-    trial_settings = trial_settings.model_copy(
-        update={
-            "vectorstore": trial_settings.vectorstore.model_copy(
-                update={
-                    "table_name": table_name,
-                    "embedding_dim": embedding_dim,
-                }
-            ),
-            "eval": trial_settings.eval.model_copy(update={"save_results": False}),
-        }
-    )
+    # Set up temp store name
+    store_name = f"{base_table}_tune_{cache_key}"
+    if settings.vectorstore.provider == "qdrant":
+        trial_settings = trial_settings.model_copy(
+            update={
+                "vectorstore": trial_settings.vectorstore.model_copy(
+                    update={"embedding_dim": embedding_dim}
+                ),
+                "qdrant": trial_settings.qdrant.model_copy(
+                    update={"collection_name": store_name}
+                ),
+                "eval": trial_settings.eval.model_copy(update={"save_results": False}),
+            }
+        )
+    else:
+        trial_settings = trial_settings.model_copy(
+            update={
+                "vectorstore": trial_settings.vectorstore.model_copy(
+                    update={
+                        "table_name": store_name,
+                        "embedding_dim": embedding_dim,
+                    }
+                ),
+                "eval": trial_settings.eval.model_copy(update={"save_results": False}),
+            }
+        )
 
     return trial_params, trial_settings, cache_key
 
@@ -247,27 +285,44 @@ def run_tune(
         raise ValueError("No search space defined. Set tune.search_space in your config YAML.")
 
     max_trials = settings.tune.max_trials
-    ingest_cache: dict[str, str] = {}  # hash -> table_name
-    temp_tables: list[str] = []
+    ingest_cache: dict[str, str] = {}  # hash -> store_name
+    temp_stores: list[str] = []
     all_trials: list[dict[str, Any]] = []
-    base_table = settings.vectorstore.table_name
 
-    # PostgreSQL silently truncates identifiers longer than 63 bytes. The temp
-    # table suffix is '_tune_' (6 chars) + 8-char hex digest = 14 chars, so the
-    # base table name must be at most 49 characters.
+    provider = settings.vectorstore.provider
+    if provider == "qdrant":
+        base_table = settings.qdrant.collection_name
+    else:
+        base_table = settings.vectorstore.table_name
+
+    # The temp store suffix is '_tune_' (6 chars) + 8-char hex digest = 14 chars.
+    # Both backends have identifier length limits that must be respected.
     tune_suffix_len = 14  # len('_tune_') + len(8-char hex digest)
-    max_base_len = 63 - tune_suffix_len
-    if len(base_table) > max_base_len:
-        raise ValueError(
-            f"vectorstore.table_name {base_table!r} is too long for tuning. "
-            f"Tuning appends a {tune_suffix_len}-char suffix; the base name "
-            f"must be at most {max_base_len} characters to stay within "
-            "PostgreSQL's 63-character identifier limit."
-        )
+    if provider == "pgvector":
+        max_base_len = 63 - tune_suffix_len  # PostgreSQL's 63-char identifier limit
+        if len(base_table) > max_base_len:
+            raise ValueError(
+                f"vectorstore.table_name {base_table!r} is too long for tuning. "
+                f"Tuning appends a {tune_suffix_len}-char suffix; the base name "
+                f"must be at most {max_base_len} characters to stay within "
+                "PostgreSQL's 63-character identifier limit."
+            )
+    elif provider == "qdrant":
+        max_base_len = 255 - tune_suffix_len  # Qdrant's 255-char collection name limit
+        if len(base_table) > max_base_len:
+            raise ValueError(
+                f"qdrant.collection_name {base_table!r} is too long for tuning. "
+                f"Tuning appends a {tune_suffix_len}-char suffix; the base name "
+                f"must be at most {max_base_len} characters to stay within "
+                "Qdrant's 255-character collection name limit."
+            )
 
     # Create a single event loop for all trials — avoids the overhead of
     # creating and destroying a loop per trial (which also prevents connection reuse).
+    # set_event_loop is safe here because n_jobs=1 runs objective() in the
+    # caller's thread; if n_jobs > 1 is ever supported, revisit this.
     loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
     def objective(trial: optuna.trial.Trial) -> float:
         trial_params, trial_settings, cache_key = _setup_trial(
@@ -277,12 +332,15 @@ def run_tune(
         from noid_rag.api import NoidRag
 
         rag = NoidRag(config=trial_settings)
-        table_name = trial_settings.vectorstore.table_name
+        if provider == "qdrant":
+            store_name = trial_settings.qdrant.collection_name
+        else:
+            store_name = trial_settings.vectorstore.table_name
 
         try:
             # Ingest if not cached
             loop.run_until_complete(
-                _ensure_ingested(cache_key, sources, rag, ingest_cache, table_name, temp_tables)
+                _ensure_ingested(cache_key, sources, rag, ingest_cache, store_name, temp_stores)
             )
 
             # Evaluate
@@ -314,15 +372,19 @@ def run_tune(
     study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler())
 
     try:
-        study.optimize(objective, n_trials=max_trials)
+        study.optimize(objective, n_trials=max_trials, n_jobs=1)
     finally:
-        # Clean up temp tables
-        if temp_tables and settings.vectorstore.dsn:
+        # Clean up temp stores
+        should_cleanup = bool(temp_stores) and (
+            provider != "pgvector" or bool(settings.vectorstore.dsn)
+        )
+        if should_cleanup:
             try:
-                loop.run_until_complete(_cleanup_tables(temp_tables, settings.vectorstore.dsn))
+                loop.run_until_complete(_cleanup_stores(temp_stores, settings))
             except Exception:
-                logger.warning("Failed to clean up temporary tables: %s", temp_tables)
+                logger.warning("Failed to clean up temporary stores: %s", temp_stores)
         loop.close()
+        asyncio.set_event_loop(None)
 
     if not any(t.state == optuna.trial.TrialState.COMPLETE for t in study.trials):
         raise ValueError(
@@ -349,8 +411,16 @@ async def arun_tune(
     settings: Settings,
     progress_callback: Callable[[int, int, float], None] | None = None,
 ) -> TuneResult:
-    """Async wrapper for run_tune (runs in executor since Optuna is sync)."""
+    """Async wrapper for run_tune (runs in executor since Optuna is sync).
+
+    Uses a one-shot ThreadPoolExecutor so that run_tune's
+    set_event_loop / set_event_loop(None) calls do not pollute the
+    default executor's reusable worker threads.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        None, run_tune, dataset_path, sources, settings, progress_callback
-    )
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return await loop.run_in_executor(
+            executor, run_tune, dataset_path, sources, settings, progress_callback
+        )

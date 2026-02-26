@@ -10,6 +10,7 @@ from noid_rag.config import (
     EvalConfig,
     LLMConfig,
     ParserConfig,
+    QdrantConfig,
     SearchConfig,
     Settings,
     VectorStoreConfig,
@@ -63,6 +64,7 @@ class TestEmbeddingConfig:
 class TestVectorStoreConfig:
     def test_defaults(self):
         c = VectorStoreConfig()
+        assert c.provider == "pgvector"
         assert c.dsn == ""
         assert c.table_name == "documents"
         assert c.embedding_dim == 1536
@@ -72,6 +74,18 @@ class TestVectorStoreConfig:
         assert c.hnsw_m == 16
         assert c.hnsw_ef_construction == 64
         assert c.fts_language == "english"
+
+    def test_provider_pgvector(self):
+        c = VectorStoreConfig(provider="pgvector")
+        assert c.provider == "pgvector"
+
+    def test_provider_qdrant(self):
+        c = VectorStoreConfig(provider="qdrant")
+        assert c.provider == "qdrant"
+
+    def test_provider_invalid_rejected(self):
+        with pytest.raises(Exception):
+            VectorStoreConfig(provider="invalid")
 
 
 class TestBatchConfig:
@@ -230,6 +244,70 @@ class TestEvalConfig:
     def test_judge_temperature_at_bounds(self):
         assert EvalConfig(judge_temperature=0.0).judge_temperature == 0.0
         assert EvalConfig(judge_temperature=2.0).judge_temperature == 2.0
+
+
+class TestQdrantConfig:
+    def test_defaults(self):
+        c = QdrantConfig()
+        assert c.url == "http://localhost:6333"
+        assert c.api_key.get_secret_value() == ""
+        assert c.collection_name == "documents"
+        assert c.prefer_grpc is False
+        assert c.timeout == 30
+        assert c.hnsw_m == 16
+        assert c.hnsw_ef_construction == 100
+
+    def test_custom_values(self):
+        c = QdrantConfig(
+            url="http://qdrant:6333",
+            collection_name="my_docs",
+            prefer_grpc=False,
+            timeout=60,
+        )
+        assert c.url == "http://qdrant:6333"
+        assert c.collection_name == "my_docs"
+        assert c.prefer_grpc is False
+        assert c.timeout == 60
+
+    def test_empty_collection_name_rejected(self):
+        with pytest.raises(ValueError, match="collection_name must not be empty"):
+            QdrantConfig(collection_name="")
+
+    def test_whitespace_collection_name_rejected(self):
+        with pytest.raises(ValueError, match="collection_name must not be empty"):
+            QdrantConfig(collection_name="   ")
+
+    def test_special_chars_in_collection_name_rejected(self):
+        with pytest.raises(ValueError, match="invalid characters"):
+            QdrantConfig(collection_name="docs; evil")
+
+    def test_hyphen_in_collection_name_allowed(self):
+        c = QdrantConfig(collection_name="my-docs")
+        assert c.collection_name == "my-docs"
+
+
+class TestSettingsQdrant:
+    def test_settings_has_qdrant(self):
+        s = Settings()
+        assert isinstance(s.qdrant, QdrantConfig)
+        assert s.qdrant.url == "http://localhost:6333"
+
+    def test_settings_load_with_qdrant(self, tmp_path):
+        import yaml
+
+        config_file = tmp_path / "config.yml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "vectorstore": {"provider": "qdrant"},
+                    "qdrant": {"url": "http://qdrant:6333", "collection_name": "test"},
+                }
+            )
+        )
+        s = Settings.load(config_file=config_file)
+        assert s.vectorstore.provider == "qdrant"
+        assert s.qdrant.url == "http://qdrant:6333"
+        assert s.qdrant.collection_name == "test"
 
 
 class TestVectorStoreConfigFtsLanguage:

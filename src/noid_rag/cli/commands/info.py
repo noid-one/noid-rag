@@ -11,10 +11,10 @@ from noid_rag.cli.display import print_error, print_stats
 @app.command()
 def info():
     """Show vector store statistics."""
-    from noid_rag.vectorstore import PgVectorStore
+    from noid_rag.vectorstore_factory import create_vectorstore
 
     async def _info():
-        async with PgVectorStore(config=state.settings.vectorstore) as store:
+        async with create_vectorstore(state.settings) as store:
             return await store.stats()
 
     try:

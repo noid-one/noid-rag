@@ -231,10 +231,10 @@ def test_ingest_caching():
 
 
 @pytest.mark.asyncio
-async def test_cleanup_tables():
+async def test_cleanup_stores_pgvector():
     from contextlib import asynccontextmanager
 
-    from noid_rag.tune import _cleanup_tables
+    from noid_rag.tune import _cleanup_stores
 
     mock_conn = AsyncMock()
 
@@ -246,10 +246,19 @@ async def test_cleanup_tables():
     mock_engine.begin = mock_begin
     mock_engine.dispose = AsyncMock()
 
+    settings = Settings()
+    settings = settings.model_copy(
+        update={
+            "vectorstore": settings.vectorstore.model_copy(
+                update={"dsn": "postgresql+asyncpg://test"}
+            )
+        }
+    )
+
     with patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=mock_engine):
-        await _cleanup_tables(
+        await _cleanup_stores(
             ["docs_tune_abc12345", "docs_tune_def67890"],
-            "postgresql+asyncpg://test",
+            settings,
         )
 
     assert mock_conn.execute.call_count == 2
@@ -257,11 +266,90 @@ async def test_cleanup_tables():
 
 
 @pytest.mark.asyncio
-async def test_cleanup_tables_skips_unsafe_names():
+async def test_cleanup_stores_qdrant():
+    """Qdrant cleanup path deletes each named collection via a raw client."""
+    from noid_rag.tune import _cleanup_stores
+
+    mock_client = AsyncMock()
+    # First collection exists, second does not
+    mock_client.collection_exists.side_effect = [True, False]
+
+    settings = Settings()
+    settings = settings.model_copy(
+        update={
+            "vectorstore": settings.vectorstore.model_copy(update={"provider": "qdrant"}),
+        }
+    )
+
+    with patch(
+        "noid_rag.vectorstore_qdrant.make_raw_client",
+        return_value=mock_client,
+    ):
+        await _cleanup_stores(
+            ["docs_tune_abc12345", "docs_tune_def67890"],
+            settings,
+        )
+
+    # Only the existing collection should be deleted
+    mock_client.delete_collection.assert_called_once_with("docs_tune_abc12345")
+    mock_client.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_stores_qdrant_skips_unsafe_names():
+    """Unsafe collection names must be skipped during Qdrant cleanup."""
+    from noid_rag.tune import _cleanup_stores
+
+    mock_client = AsyncMock()
+    mock_client.collection_exists.return_value = True
+
+    settings = Settings()
+    settings = settings.model_copy(
+        update={
+            "vectorstore": settings.vectorstore.model_copy(update={"provider": "qdrant"}),
+        }
+    )
+
+    with patch(
+        "noid_rag.vectorstore_qdrant.make_raw_client",
+        return_value=mock_client,
+    ):
+        await _cleanup_stores(
+            ["docs_tune_abc12345", "bad; DROP collection evil; --", "docs_tune_def67890"],
+            settings,
+        )
+
+    # Only the two safe names should be deleted; the unsafe one is skipped
+    assert mock_client.delete_collection.call_count == 2
+    mock_client.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_stores_qdrant_make_raw_client_raises():
+    """When make_raw_client raises, the original error must propagate (not UnboundLocalError)."""
+    from noid_rag.tune import _cleanup_stores
+
+    settings = Settings()
+    settings = settings.model_copy(
+        update={
+            "vectorstore": settings.vectorstore.model_copy(update={"provider": "qdrant"}),
+        }
+    )
+
+    with patch(
+        "noid_rag.vectorstore_qdrant.make_raw_client",
+        side_effect=ImportError("qdrant-client not installed"),
+    ):
+        with pytest.raises(ImportError, match="qdrant-client not installed"):
+            await _cleanup_stores(["docs_tune_abc12345"], settings)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_stores_pgvector_skips_unsafe_names():
     """Table names that fail the safe-identifier check must be skipped, not executed."""
     from contextlib import asynccontextmanager
 
-    from noid_rag.tune import _cleanup_tables
+    from noid_rag.tune import _cleanup_stores
 
     mock_conn = AsyncMock()
 
@@ -273,11 +361,20 @@ async def test_cleanup_tables_skips_unsafe_names():
     mock_engine.begin = mock_begin
     mock_engine.dispose = AsyncMock()
 
+    settings = Settings()
+    settings = settings.model_copy(
+        update={
+            "vectorstore": settings.vectorstore.model_copy(
+                update={"dsn": "postgresql+asyncpg://test"}
+            )
+        }
+    )
+
     with patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=mock_engine):
-        await _cleanup_tables(
+        await _cleanup_stores(
             # safe name, unsafe name (contains semicolon), safe name
             ["docs_tune_abc12345", "bad; DROP TABLE users; --", "docs_tune_def67890"],
-            "postgresql+asyncpg://test",
+            settings,
         )
 
     # Only the two safe names should have been executed
@@ -323,7 +420,7 @@ def test_cleanup_failure_is_swallowed(caplog):
         mock_rag_cls.return_value = instance
 
         with patch(
-            "noid_rag.tune._cleanup_tables",
+            "noid_rag.tune._cleanup_stores",
             side_effect=RuntimeError("db gone"),
         ):
             with caplog.at_level(logging.WARNING, logger="noid_rag.tune"):
@@ -638,3 +735,53 @@ def test_table_name_at_max_length_is_accepted():
         result = run_tune("test.yml", ["doc.pdf"], settings)
 
     assert result.total_trials == 1
+
+
+def test_run_tune_qdrant_e2e():
+    """End-to-end run_tune with provider=qdrant exercises the Qdrant branch in _setup_trial."""
+    pytest.importorskip("optuna")
+
+    from noid_rag.tune import run_tune
+
+    settings = Settings()
+    settings = settings.model_copy(
+        update={
+            "vectorstore": settings.vectorstore.model_copy(update={"provider": "qdrant"}),
+            "tune": settings.tune.model_copy(
+                update={
+                    "max_trials": 2,
+                    "search_space": {"search": {"top_k": [3, 5]}},
+                }
+            ),
+        }
+    )
+
+    mock_summary = EvalSummary(
+        results=[],
+        mean_scores={"faithfulness": 0.8},
+        backend="ragas",
+        model="test",
+        total_questions=1,
+        dataset_path="test.yml",
+    )
+
+    mock_client = AsyncMock()
+    mock_client.collection_exists.return_value = False
+
+    with (
+        patch("noid_rag.api.NoidRag") as mock_rag_cls,
+        patch("noid_rag.vectorstore_qdrant.make_raw_client", return_value=mock_client),
+    ):
+        instance = MagicMock()
+        instance.aingest = AsyncMock(return_value={"chunks_stored": 1, "document_id": "d"})
+        instance.aeval = AsyncMock(return_value=mock_summary)
+        instance.close = AsyncMock()
+        mock_rag_cls.return_value = instance
+
+        result = run_tune("test.yml", ["doc.pdf"], settings)
+
+    assert result.total_trials == 2
+    # Verify the settings passed to NoidRag used qdrant collection names with tune suffix
+    for call in mock_rag_cls.call_args_list:
+        used_settings = call.kwargs.get("config") or call.args[0]
+        assert "_tune_" in used_settings.qdrant.collection_name

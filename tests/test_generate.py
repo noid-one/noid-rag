@@ -35,7 +35,9 @@ class TestCallLlm:
         assert result[0]["ground_truth"] == "A."
 
     @pytest.mark.asyncio
-    async def test_malformed_json_raises(self):
+    async def test_malformed_json_retries_then_raises(self):
+        from tenacity import RetryError
+
         from noid_rag.generate import _call_llm
 
         mock_config = MagicMock()
@@ -49,8 +51,11 @@ class TestCallLlm:
         mock_client = AsyncMock()
         mock_client.post.return_value = mock_resp
 
-        with pytest.raises(json.JSONDecodeError):
+        with pytest.raises(RetryError) as exc_info:
             await _call_llm(mock_config, "test-model", "chunk text", 1, http_client=mock_client)
+        assert isinstance(exc_info.value.last_attempt.exception(), json.JSONDecodeError)
+        # Verify 3 retry attempts were made
+        assert mock_client.post.call_count == 3
 
     @pytest.mark.asyncio
     async def test_non_array_response_raises(self):
@@ -69,6 +74,8 @@ class TestCallLlm:
 
         with pytest.raises(ValueError, match="Expected JSON array"):
             await _call_llm(mock_config, "test-model", "chunk text", 1, http_client=mock_client)
+        # ValueError is NOT retried — only one attempt should be made
+        assert mock_client.post.call_count == 1
 
     @pytest.mark.asyncio
     async def test_missing_fields_filtered(self):

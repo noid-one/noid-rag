@@ -312,6 +312,21 @@ class TestRunEvaluation:
 
 
 class TestRagasBackend:
+    def test_score_prompt_extracts_numeric_from_verbose_response(self):
+        """The generated score_prompt should extract the first number from LLM responses."""
+        from noid_rag.eval_backends.ragas_backend import _build_eval_script
+
+        script = _build_eval_script(
+            data_path="/tmp/data.json",
+            output_path="/tmp/results.json",
+            metrics=["faithfulness"],
+            api_url="https://api.example.com/v1",
+            model="test-model",
+        )
+        # The script should use re.search to extract numeric tokens, not bare float()
+        assert "re.search" in script
+        assert "import re" in script
+
     def test_build_eval_script(self):
         from noid_rag.eval_backends.ragas_backend import _ENV_API_KEY, _build_eval_script
 

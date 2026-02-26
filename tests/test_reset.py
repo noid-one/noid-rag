@@ -42,15 +42,18 @@ class TestDrop:
 
 class TestNoidRagReset:
     @pytest.mark.asyncio
-    @patch("noid_rag.vectorstore.PgVectorStore.drop", new_callable=AsyncMock)
-    @patch("noid_rag.vectorstore.PgVectorStore.connect", new_callable=AsyncMock)
-    @patch("noid_rag.vectorstore.PgVectorStore.close", new_callable=AsyncMock)
-    async def test_areset_calls_drop(self, mock_close, mock_connect, mock_drop):
+    @patch("noid_rag.vectorstore_factory.create_vectorstore")
+    async def test_areset_calls_drop(self, mock_create_vs):
         from noid_rag.api import NoidRag
+
+        mock_store = AsyncMock()
+        mock_store.__aenter__ = AsyncMock(return_value=mock_store)
+        mock_store.__aexit__ = AsyncMock(return_value=False)
+        mock_create_vs.return_value = mock_store
 
         rag = NoidRag()
         await rag.areset()
-        mock_drop.assert_called_once()
+        mock_store.drop.assert_called_once()
 
     @patch("noid_rag.api.NoidRag.areset", new_callable=AsyncMock)
     def test_reset_calls_areset(self, mock_areset):
@@ -62,17 +65,20 @@ class TestNoidRagReset:
 
 
 class TestResetCLI:
-    @patch("noid_rag.vectorstore.PgVectorStore.drop", new_callable=AsyncMock)
-    @patch("noid_rag.vectorstore.PgVectorStore.connect", new_callable=AsyncMock)
-    @patch("noid_rag.vectorstore.PgVectorStore.close", new_callable=AsyncMock)
-    def test_reset_with_yes_flag(self, mock_close, mock_connect, mock_drop):
+    @patch("noid_rag.vectorstore_factory.create_vectorstore")
+    def test_reset_with_yes_flag(self, mock_create_vs):
         from noid_rag.cli.main import app
+
+        mock_store = AsyncMock()
+        mock_store.__aenter__ = AsyncMock(return_value=mock_store)
+        mock_store.__aexit__ = AsyncMock(return_value=False)
+        mock_create_vs.return_value = mock_store
 
         runner = CliRunner()
         result = runner.invoke(app, ["reset", "--yes"])
 
         assert result.exit_code == 0
-        mock_drop.assert_called_once()
+        mock_store.drop.assert_called_once()
 
     def test_reset_aborts_without_confirmation(self):
         from noid_rag.cli.main import app
@@ -82,13 +88,16 @@ class TestResetCLI:
 
         assert result.exit_code != 0
 
-    @patch("noid_rag.vectorstore.PgVectorStore.drop", new_callable=AsyncMock)
-    @patch("noid_rag.vectorstore.PgVectorStore.connect", new_callable=AsyncMock)
-    @patch("noid_rag.vectorstore.PgVectorStore.close", new_callable=AsyncMock)
-    def test_reset_exits_1_on_error(self, mock_close, mock_connect, mock_drop):
+    @patch("noid_rag.vectorstore_factory.create_vectorstore")
+    def test_reset_exits_1_on_error(self, mock_create_vs):
         from noid_rag.cli.main import app
 
-        mock_drop.side_effect = RuntimeError("connection refused")
+        mock_store = AsyncMock()
+        mock_store.__aenter__ = AsyncMock(return_value=mock_store)
+        mock_store.__aexit__ = AsyncMock(return_value=False)
+        mock_store.drop.side_effect = RuntimeError("connection refused")
+        mock_create_vs.return_value = mock_store
+
         runner = CliRunner()
         result = runner.invoke(app, ["reset", "--yes"])
 

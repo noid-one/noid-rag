@@ -159,16 +159,16 @@ class NoidRag:
     # --- Async API ---
 
     async def areset(self) -> None:
-        """Async: drop the vector store table."""
-        from noid_rag.vectorstore import PgVectorStore
+        """Async: drop the vector store."""
+        from noid_rag.vectorstore_factory import create_vectorstore
 
-        async with PgVectorStore(config=self.settings.vectorstore) as store:
+        async with create_vectorstore(self.settings) as store:
             await store.drop()
 
     async def aingest(self, source: str | Path) -> dict[str, Any]:
         """Async: parse, chunk, embed, and store."""
         from noid_rag.chunker import chunk as do_chunk
-        from noid_rag.vectorstore import PgVectorStore
+        from noid_rag.vectorstore_factory import create_vectorstore
 
         doc = self.parse(source)
         chunks = do_chunk(doc, config=self.settings.chunker)
@@ -176,14 +176,14 @@ class NoidRag:
         embed_client = self._get_embed_client()
         await embed_client.embed_chunks(chunks)
 
-        async with PgVectorStore(config=self.settings.vectorstore) as store:
+        async with create_vectorstore(self.settings) as store:
             deleted, count = await store.replace_document(doc.id, chunks)
 
         return {"chunks_stored": count, "chunks_deleted": deleted, "document_id": doc.id}
 
     async def asearch(self, query: str, top_k: int | None = None) -> list[SearchResult]:
         """Async: hybrid search (vector + keyword with RRF)."""
-        from noid_rag.vectorstore import PgVectorStore
+        from noid_rag.vectorstore_factory import create_vectorstore
 
         top_k = self.settings.search.top_k if top_k is None else top_k
         rrf_k = self.settings.search.rrf_k
@@ -191,7 +191,7 @@ class NoidRag:
         embed_client = self._get_embed_client()
         query_embedding = await embed_client.embed_query(query)
 
-        async with PgVectorStore(config=self.settings.vectorstore) as store:
+        async with create_vectorstore(self.settings) as store:
             return await store.hybrid_search(
                 query_embedding,
                 query,
@@ -254,18 +254,31 @@ class NoidRag:
         )
 
     async def abatch(self, directory: str | Path, pattern: str = "*") -> dict[str, Any]:
-        """Async: batch process a directory."""
+        """Async: batch process a directory.
+
+        Reuses a single store connection for the entire batch to avoid
+        per-file connection overhead (collection-existence checks, etc.).
+        """
         from dataclasses import asdict
 
         from noid_rag.batch import BatchProcessor
+        from noid_rag.chunker import chunk as do_chunk
+        from noid_rag.vectorstore_factory import create_vectorstore
 
         directory = Path(directory)
         files = sorted(f for f in directory.glob(pattern) if f.is_file())
 
         processor = BatchProcessor(config=self.settings.batch)
 
-        async def process_one(file_path: Path) -> dict[str, Any]:
-            return await self.aingest(file_path)
+        async with create_vectorstore(self.settings) as store:
+            embed_client = self._get_embed_client()
 
-        result = await processor.process(files, process_one)
+            async def process_one(file_path: Path) -> dict[str, Any]:
+                doc = self.parse(file_path)
+                chunks = do_chunk(doc, config=self.settings.chunker)
+                await embed_client.embed_chunks(chunks)
+                deleted, count = await store.replace_document(doc.id, chunks)
+                return {"chunks_stored": count, "chunks_deleted": deleted, "document_id": doc.id}
+
+            result = await processor.process(files, process_one)
         return asdict(result)

@@ -17,7 +17,7 @@ def ingest(
     from noid_rag.chunker import chunk as do_chunk
     from noid_rag.embeddings import EmbeddingClient
     from noid_rag.parser import parse as do_parse
-    from noid_rag.vectorstore import PgVectorStore
+    from noid_rag.vectorstore_factory import create_vectorstore
 
     async def _ingest():
         with console.status(f"Parsing {source.name}..."):
@@ -26,19 +26,22 @@ def ingest(
         with console.status("Chunking..."):
             chunks = do_chunk(doc, config=state.settings.chunker)
 
-        embed_client = EmbeddingClient(config=state.settings.embedding)
-        with console.status(f"Embedding {len(chunks)} chunks..."):
-            await embed_client.embed_chunks(chunks)
+        async with EmbeddingClient(config=state.settings.embedding) as embed_client:
+            with console.status(f"Embedding {len(chunks)} chunks..."):
+                await embed_client.embed_chunks(chunks)
 
-        async with PgVectorStore(config=state.settings.vectorstore) as store:
+        async with create_vectorstore(state.settings) as store:
             with console.status("Storing..."):
-                count = await store.upsert(chunks)
+                deleted, count = await store.replace_document(doc.id, chunks)
 
-        return doc.id, count
+        return doc.id, count, deleted
 
     try:
-        doc_id, count = asyncio.run(_ingest())
-        print_success(f"Ingested {source.name}: {count} chunks stored (doc: {doc_id})")
+        doc_id, count, deleted = asyncio.run(_ingest())
+        msg = f"Ingested {source.name}: {count} chunks stored (doc: {doc_id})"
+        if deleted:
+            msg += f", {deleted} previous chunks replaced"
+        print_success(msg)
     except Exception as e:
         print_error(f"Failed to ingest {source}: {e}")
         raise typer.Exit(1)

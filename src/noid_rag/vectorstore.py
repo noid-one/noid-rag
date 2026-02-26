@@ -380,7 +380,7 @@ class PgVectorStore:
         return {
             "total_chunks": total_count,
             "total_documents": doc_count,
-            "table_name": table,
+            "store_name": table,
             "embedding_dim": self.config.embedding_dim,
         }
 

@@ -11,6 +11,8 @@ from pydantic import BaseModel, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
+# Qdrant collection names allow hyphens in addition to alphanumerics and underscores.
+_SAFE_COLLECTION_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]{0,254}$")
 
 
 class ParserConfig(BaseModel):
@@ -35,6 +37,7 @@ class EmbeddingConfig(BaseModel):
 
 
 class VectorStoreConfig(BaseModel):
+    provider: Literal["pgvector", "qdrant"] = "pgvector"
     dsn: str = ""
     table_name: str = "documents"
     embedding_dim: int = 1536
@@ -132,6 +135,29 @@ class TuneConfig(BaseModel):
         return v
 
 
+class QdrantConfig(BaseModel):
+    url: str = "http://localhost:6333"
+    api_key: SecretStr = SecretStr("")
+    collection_name: str = "documents"
+    prefer_grpc: bool = False  # gRPC requires grpcio; HTTP works out-of-the-box
+    timeout: int = 30
+    hnsw_m: int = 16
+    hnsw_ef_construction: int = 100
+
+    @field_validator("collection_name")
+    @classmethod
+    def _validate_collection_name(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("collection_name must not be empty")
+        if not _SAFE_COLLECTION_RE.match(v):
+            raise ValueError(
+                f"collection_name {v!r} contains invalid characters. "
+                "Use only letters, digits, underscores, and hyphens, "
+                "starting with a letter or underscore."
+            )
+        return v
+
+
 def _load_yaml_config(path: Path | None = None) -> dict[str, Any]:
     """Load config from YAML file."""
     if path is None:
@@ -161,6 +187,7 @@ class Settings(BaseSettings):
     generate: GenerateConfig = Field(default_factory=GenerateConfig)
     eval: EvalConfig = Field(default_factory=EvalConfig)
     tune: TuneConfig = Field(default_factory=TuneConfig)
+    qdrant: QdrantConfig = Field(default_factory=QdrantConfig)
 
     config_file: Path | None = None
     verbose: bool = False

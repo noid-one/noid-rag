@@ -26,7 +26,7 @@ def batch(
     from noid_rag.embeddings import EmbeddingClient
     from noid_rag.export import export
     from noid_rag.parser import parse as do_parse
-    from noid_rag.vectorstore import PgVectorStore
+    from noid_rag.vectorstore_factory import create_vectorstore
 
     processor = BatchProcessor(config=state.settings.batch)
 
@@ -53,24 +53,29 @@ def batch(
         return
 
     async def _batch():
-        embed_client = EmbeddingClient(config=state.settings.embedding)
+        async with EmbeddingClient(config=state.settings.embedding) as embed_client:
+            async with create_vectorstore(state.settings) as store:
 
-        async with PgVectorStore(config=state.settings.vectorstore) as store:
+                async def process_one(file_path: Path) -> dict:
+                    doc = do_parse(file_path, config=state.settings.parser)
+                    chunks = do_chunk(doc, config=state.settings.chunker)
+                    await embed_client.embed_chunks(chunks)
+                    deleted, count = await store.replace_document(doc.id, chunks)
+                    return {
+                        "chunks_stored": count,
+                        "chunks_replaced": deleted,
+                        "document_id": doc.id,
+                    }
 
-            async def process_one(file_path: Path) -> dict:
-                doc = do_parse(file_path, config=state.settings.parser)
-                chunks = do_chunk(doc, config=state.settings.chunker)
-                await embed_client.embed_chunks(chunks)
-                count = await store.upsert(chunks)
-                return {"chunks_stored": count, "document_id": doc.id}
+                with create_progress() as progress:
+                    task = progress.add_task("Processing...", total=len(files))
 
-            with create_progress() as progress:
-                task = progress.add_task("Processing...", total=len(files))
+                    def on_progress(filename: str, current: int, total: int):
+                        progress.update(
+                            task, completed=current, description=f"Processing {filename}"
+                        )
 
-                def on_progress(filename: str, current: int, total: int):
-                    progress.update(task, completed=current, description=f"Processing {filename}")
-
-                result = await processor.process(files, process_one, progress=on_progress)
+                    result = await processor.process(files, process_one, progress=on_progress)
 
         return result
 

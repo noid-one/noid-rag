@@ -287,7 +287,7 @@ class TestPgVectorStoreStats:
         stats = await store.stats()
         assert stats["total_chunks"] == 100
         assert stats["total_documents"] == 10
-        assert stats["table_name"] == "my_docs"
+        assert stats["store_name"] == "my_docs"
         assert stats["embedding_dim"] == 10
 
 
