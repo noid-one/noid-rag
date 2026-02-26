@@ -1,0 +1,13 @@
+{
+  "include": ["src/noid_rag"],
+  "exclude": ["tests", "src/noid_rag/parser.py", "src/noid_rag/chunker.py"],
+  "pythonVersion": "3.11",
+  "pythonPlatform": "All",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": true,
+  "reportMissingTypeStubs": false,
+  "reportUnusedImport": false,
+  "reportUnusedVariable": false,
+  "venvPath": ".",
+  "venv": ".venv"
+}

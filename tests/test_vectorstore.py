@@ -52,6 +52,9 @@ class TestPgVectorStoreConnect:
         await store.connect()
 
         mock_create_engine.assert_called_once()
+        call_kwargs = mock_create_engine.call_args
+        assert call_kwargs.kwargs.get("max_overflow") == config.max_overflow
+        assert call_kwargs.kwargs.get("pool_timeout") == config.pool_timeout
         assert store._engine is not None
 
 

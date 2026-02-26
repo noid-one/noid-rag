@@ -25,11 +25,19 @@ class PgVectorStore:
         self.config = config or VectorStoreConfig()
         self._engine: AsyncEngine | None = None
 
+    def _get_engine(self) -> AsyncEngine:
+        """Return the engine, raising if not connected."""
+        if self._engine is None:
+            raise RuntimeError("VectorStore not connected. Call connect() first.")
+        return self._engine
+
     async def connect(self) -> None:
         """Create engine and ensure table/indexes exist."""
         self._engine = create_async_engine(
             self.config.dsn,
             pool_size=self.config.pool_size,
+            max_overflow=self.config.max_overflow,
+            pool_timeout=self.config.pool_timeout,
             pool_pre_ping=True,
         )
         await self._ensure_table()
@@ -38,7 +46,7 @@ class PgVectorStore:
         """Create table and indexes if they don't exist."""
         dim = self.config.embedding_dim
         table = self.config.table_name
-        async with self._engine.begin() as conn:
+        async with self._get_engine().begin() as conn:
             await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
             await conn.execute(
                 text(f"""
@@ -79,44 +87,55 @@ class PgVectorStore:
             """)
             )
 
+    async def _insert_chunks(
+        self,
+        conn: Any,
+        chunks: list[Chunk],
+        table: str,
+        now: datetime,
+        fts_language: str,
+    ) -> None:
+        """Insert or upsert chunks within an existing transaction."""
+        for chunk in chunks:
+            if chunk.embedding is None:
+                raise ValueError(f"Chunk {chunk.id} has no embedding")
+            embedding_str = "[" + ",".join(str(v) for v in chunk.embedding) + "]"
+            await conn.execute(
+                text(f"""
+                    INSERT INTO {table}
+                        (id, document_id, text, embedding, metadata,
+                         created_at, updated_at, tsv)
+                    VALUES
+                        (:id, :doc_id, :text, CAST(:embedding AS vector),
+                         CAST(:metadata AS jsonb), :created_at, :updated_at,
+                         to_tsvector(:fts_lang, :text))
+                    ON CONFLICT (id) DO UPDATE SET
+                        text = EXCLUDED.text,
+                        embedding = EXCLUDED.embedding,
+                        metadata = EXCLUDED.metadata,
+                        updated_at = EXCLUDED.updated_at,
+                        tsv = to_tsvector(:fts_lang, EXCLUDED.text)
+                """),
+                {
+                    "id": chunk.id,
+                    "doc_id": chunk.document_id,
+                    "text": chunk.text,
+                    "embedding": embedding_str,
+                    "metadata": json.dumps(chunk.metadata),
+                    "created_at": now,
+                    "updated_at": now,
+                    "fts_lang": fts_language,
+                },
+            )
+
     async def upsert(self, chunks: list[Chunk]) -> int:
         """Upsert chunks into the store. Returns count of upserted rows."""
         if not chunks:
             return 0
         table = self.config.table_name
         now = datetime.now(timezone.utc)
-        async with self._engine.begin() as conn:
-            for chunk in chunks:
-                if chunk.embedding is None:
-                    raise ValueError(f"Chunk {chunk.id} has no embedding")
-                embedding_str = "[" + ",".join(str(v) for v in chunk.embedding) + "]"
-                await conn.execute(
-                    text(f"""
-                        INSERT INTO {table}
-                            (id, document_id, text, embedding, metadata,
-                             created_at, updated_at, tsv)
-                        VALUES
-                            (:id, :doc_id, :text, CAST(:embedding AS vector),
-                             CAST(:metadata AS jsonb), :created_at, :updated_at,
-                             to_tsvector(:fts_lang, :text))
-                        ON CONFLICT (id) DO UPDATE SET
-                            text = EXCLUDED.text,
-                            embedding = EXCLUDED.embedding,
-                            metadata = EXCLUDED.metadata,
-                            updated_at = EXCLUDED.updated_at,
-                            tsv = to_tsvector(:fts_lang, EXCLUDED.text)
-                    """),
-                    {
-                        "id": chunk.id,
-                        "doc_id": chunk.document_id,
-                        "text": chunk.text,
-                        "embedding": embedding_str,
-                        "metadata": json.dumps(chunk.metadata),
-                        "created_at": now,
-                        "updated_at": now,
-                        "fts_lang": self.config.fts_language,
-                    },
-                )
+        async with self._get_engine().begin() as conn:
+            await self._insert_chunks(conn, chunks, table, now, self.config.fts_language)
         return len(chunks)
 
     async def replace_document(self, document_id: str, chunks: list[Chunk]) -> tuple[int, int]:
@@ -129,43 +148,13 @@ class PgVectorStore:
         """
         table = self.config.table_name
         now = datetime.now(timezone.utc)
-        async with self._engine.begin() as conn:
+        async with self._get_engine().begin() as conn:
             result = await conn.execute(
                 text(f"DELETE FROM {table} WHERE document_id = :doc_id"),
                 {"doc_id": document_id},
             )
             deleted = result.rowcount
-            for chunk in chunks:
-                if chunk.embedding is None:
-                    raise ValueError(f"Chunk {chunk.id} has no embedding")
-                embedding_str = "[" + ",".join(str(v) for v in chunk.embedding) + "]"
-                await conn.execute(
-                    text(f"""
-                        INSERT INTO {table}
-                            (id, document_id, text, embedding, metadata,
-                             created_at, updated_at, tsv)
-                        VALUES
-                            (:id, :doc_id, :text, CAST(:embedding AS vector),
-                             CAST(:metadata AS jsonb), :created_at, :updated_at,
-                             to_tsvector(:fts_lang, :text))
-                        ON CONFLICT (id) DO UPDATE SET
-                            text = EXCLUDED.text,
-                            embedding = EXCLUDED.embedding,
-                            metadata = EXCLUDED.metadata,
-                            updated_at = EXCLUDED.updated_at,
-                            tsv = to_tsvector(:fts_lang, EXCLUDED.text)
-                    """),
-                    {
-                        "id": chunk.id,
-                        "doc_id": chunk.document_id,
-                        "text": chunk.text,
-                        "embedding": embedding_str,
-                        "metadata": json.dumps(chunk.metadata),
-                        "created_at": now,
-                        "updated_at": now,
-                        "fts_lang": self.config.fts_language,
-                    },
-                )
+            await self._insert_chunks(conn, chunks, table, now, self.config.fts_language)
         return deleted, len(chunks)
 
     async def search(
@@ -194,7 +183,7 @@ class PgVectorStore:
                 params[param_name] = str(value)
             where_clause = "WHERE " + " AND ".join(conditions)
 
-        async with self._engine.connect() as conn:
+        async with self._get_engine().connect() as conn:
             result = await conn.execute(
                 text(f"""
                     SELECT id, document_id, text, metadata,
@@ -247,7 +236,7 @@ class PgVectorStore:
 
         where_clause = "WHERE " + " AND ".join(conditions)
 
-        async with self._engine.connect() as conn:
+        async with self._get_engine().connect() as conn:
             result = await conn.execute(
                 text(f"""
                     SELECT id, document_id, text, metadata,
@@ -318,7 +307,7 @@ class PgVectorStore:
             diverse: sample evenly across distinct document_ids
         """
         table = self.config.table_name
-        async with self._engine.connect() as conn:
+        async with self._get_engine().connect() as conn:
             if strategy == "random":
                 result = await conn.execute(
                     text(f"""
@@ -365,13 +354,13 @@ class PgVectorStore:
     async def drop(self) -> None:
         """Drop the table and all its indexes."""
         table = self.config.table_name
-        async with self._engine.begin() as conn:
+        async with self._get_engine().begin() as conn:
             await conn.execute(text(f"DROP TABLE IF EXISTS {table}"))
 
     async def delete(self, document_id: str) -> int:
         """Delete all chunks for a document. Returns count of deleted rows."""
         table = self.config.table_name
-        async with self._engine.begin() as conn:
+        async with self._get_engine().begin() as conn:
             result = await conn.execute(
                 text(f"DELETE FROM {table} WHERE document_id = :doc_id"),
                 {"doc_id": document_id},
@@ -381,7 +370,7 @@ class PgVectorStore:
     async def stats(self) -> dict[str, Any]:
         """Get store statistics."""
         table = self.config.table_name
-        async with self._engine.connect() as conn:
+        async with self._get_engine().connect() as conn:
             total = await conn.execute(text(f"SELECT COUNT(*) FROM {table}"))
             total_count = total.scalar()
 

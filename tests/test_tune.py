@@ -217,6 +217,7 @@ def test_ingest_caching():
         instance = MagicMock()
         instance.aingest = AsyncMock(return_value={"chunks_stored": 5, "document_id": "doc_test"})
         instance.aeval = AsyncMock(return_value=mock_summary)
+        instance.close = AsyncMock()
         mock_rag_cls.return_value = instance
 
         result = run_tune("test.yml", ["doc1.pdf"], settings)
@@ -318,6 +319,7 @@ def test_cleanup_failure_is_swallowed(caplog):
         instance = MagicMock()
         instance.aingest = AsyncMock(return_value={"chunks_stored": 1, "document_id": "d"})
         instance.aeval = AsyncMock(return_value=mock_summary)
+        instance.close = AsyncMock()
         mock_rag_cls.return_value = instance
 
         with patch(
@@ -366,6 +368,7 @@ def test_run_tune_e2e():
         instance = MagicMock()
         instance.aingest = AsyncMock(return_value={"chunks_stored": 5, "document_id": "doc_test"})
         instance.aeval = AsyncMock(return_value=mock_summary)
+        instance.close = AsyncMock()
         mock_rag_cls.return_value = instance
 
         progress_calls = []
@@ -585,6 +588,7 @@ def test_hnsw_dim_limit_prunes_trial():
         instance = MagicMock()
         instance.aingest = AsyncMock(return_value={"chunks_stored": 5, "document_id": "doc_test"})
         instance.aeval = AsyncMock(return_value=mock_summary)
+        instance.close = AsyncMock()
         mock_rag_cls.return_value = instance
 
         result = run_tune("test.yml", ["doc1.pdf"], settings)
@@ -628,6 +632,7 @@ def test_table_name_at_max_length_is_accepted():
         instance = MagicMock()
         instance.aingest = AsyncMock(return_value={"chunks_stored": 1, "document_id": "d"})
         instance.aeval = AsyncMock(return_value=mock_summary)
+        instance.close = AsyncMock()
         mock_rag_cls.return_value = instance
 
         result = run_tune("test.yml", ["doc.pdf"], settings)

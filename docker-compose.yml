@@ -1,0 +1,33 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-noidrag}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-noidrag}
+      POSTGRES_DB: ${POSTGRES_DB:-noidrag}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-noidrag}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NOID_RAG_VECTORSTORE__DSN: "postgresql+asyncpg://${POSTGRES_USER:-noidrag}:${POSTGRES_PASSWORD:-noidrag}@db:5432/${POSTGRES_DB:-noidrag}"
+      NOID_RAG_EMBEDDING__API_KEY: "${NOID_RAG_EMBEDDING__API_KEY:-}"
+      NOID_RAG_LLM__API_KEY: "${NOID_RAG_LLM__API_KEY:-}"
+    volumes:
+      - ./data:/app/data
+    entrypoint: ["noid-rag"]
+    command: ["--help"]
+
+volumes:
+  pgdata:

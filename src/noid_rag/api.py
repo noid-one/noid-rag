@@ -17,6 +17,11 @@ class NoidRag:
     Sync methods use asyncio.run() internally. Async variants available.
     No Rich imports — CLI layer handles formatting.
     All returns are plain dicts/dataclasses.
+
+    Supports async context manager for connection reuse:
+        async with NoidRag() as rag:
+            await rag.aingest("doc.pdf")
+            result = await rag.aanswer("query")
     """
 
     def __init__(self, config: dict[str, Any] | Settings | None = None):
@@ -26,6 +31,40 @@ class NoidRag:
             self.settings = Settings.load(**config)
         else:
             self.settings = Settings.load()
+
+        self._embed_client: Any | None = None
+        self._llm_client: Any | None = None
+
+    def _get_embed_client(self) -> Any:
+        """Return a shared EmbeddingClient, creating lazily."""
+        if self._embed_client is None:
+            from noid_rag.embeddings import EmbeddingClient
+
+            self._embed_client = EmbeddingClient(config=self.settings.embedding)
+        return self._embed_client
+
+    def _get_llm_client(self) -> Any:
+        """Return a shared LLMClient, creating lazily."""
+        if self._llm_client is None:
+            from noid_rag.llm import LLMClient
+
+            self._llm_client = LLMClient(config=self.settings.llm)
+        return self._llm_client
+
+    async def close(self) -> None:
+        """Close shared HTTP clients."""
+        if self._embed_client is not None:
+            await self._embed_client.close()
+            self._embed_client = None
+        if self._llm_client is not None:
+            await self._llm_client.close()
+            self._llm_client = None
+
+    async def __aenter__(self) -> NoidRag:
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        await self.close()
 
     # --- Sync API ---
 
@@ -129,13 +168,12 @@ class NoidRag:
     async def aingest(self, source: str | Path) -> dict[str, Any]:
         """Async: parse, chunk, embed, and store."""
         from noid_rag.chunker import chunk as do_chunk
-        from noid_rag.embeddings import EmbeddingClient
         from noid_rag.vectorstore import PgVectorStore
 
         doc = self.parse(source)
         chunks = do_chunk(doc, config=self.settings.chunker)
 
-        embed_client = EmbeddingClient(config=self.settings.embedding)
+        embed_client = self._get_embed_client()
         await embed_client.embed_chunks(chunks)
 
         async with PgVectorStore(config=self.settings.vectorstore) as store:
@@ -145,13 +183,12 @@ class NoidRag:
 
     async def asearch(self, query: str, top_k: int | None = None) -> list[SearchResult]:
         """Async: hybrid search (vector + keyword with RRF)."""
-        from noid_rag.embeddings import EmbeddingClient
         from noid_rag.vectorstore import PgVectorStore
 
         top_k = self.settings.search.top_k if top_k is None else top_k
         rrf_k = self.settings.search.rrf_k
 
-        embed_client = EmbeddingClient(config=self.settings.embedding)
+        embed_client = self._get_embed_client()
         query_embedding = await embed_client.embed_query(query)
 
         async with PgVectorStore(config=self.settings.vectorstore) as store:
@@ -164,8 +201,6 @@ class NoidRag:
 
     async def aanswer(self, query: str, top_k: int | None = None) -> AnswerResult:
         """Async: search and synthesize an answer via LLM."""
-        from noid_rag.llm import LLMClient
-
         results = await self.asearch(query, top_k=top_k)  # top_k=None resolved in asearch
 
         if not results:
@@ -177,7 +212,7 @@ class NoidRag:
 
         context = "\n\n---\n\n".join(f"[Source: {r.document_id}]\n{r.text}" for r in results)
 
-        llm = LLMClient(config=self.settings.llm)
+        llm = self._get_llm_client()
         answer_text = await llm.generate(query, context)
 
         return AnswerResult(

@@ -226,6 +226,79 @@ class TestRunEvaluation:
         assert summary.backend == "ragas"
         assert "faithfulness" in summary.mean_scores
 
+    async def test_partial_failure_preserves_results(
+        self, dataset_file, eval_config, mock_settings
+    ):
+        """If one question fails, completed results should still be returned."""
+        call_count = 0
+
+        async def failing_aanswer(question, top_k=None):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                raise RuntimeError("LLM timeout")
+            return AnswerResult(
+                answer="Test answer",
+                sources=[
+                    SearchResult(
+                        chunk_id="chk_1",
+                        text="context text",
+                        score=0.9,
+                        metadata={},
+                        document_id="doc_1",
+                    ),
+                ],
+                model="test-model",
+            )
+
+        mock_rag = MagicMock()
+        mock_rag.aanswer = AsyncMock(side_effect=failing_aanswer)
+
+        mock_results = [
+            EvalResult(
+                "What is X?",
+                "Test answer",
+                ["context text"],
+                "X is Y.",
+                scores={"faithfulness": 0.9},
+            ),
+        ]
+
+        with patch(
+            "noid_rag.eval_backends.ragas_backend.run_ragas",
+            new_callable=AsyncMock,
+            return_value=mock_results,
+        ):
+            from noid_rag.eval import run_evaluation
+
+            summary = await run_evaluation(
+                dataset_file,
+                eval_config,
+                mock_settings,
+                mock_rag,
+                top_k=3,
+            )
+
+        # 2 questions in dataset, 1 failed, 1 succeeded
+        assert summary.total_questions == 2
+        assert len(summary.results) == 1
+
+    async def test_all_failures_raises(self, dataset_file, eval_config, mock_settings):
+        """If all questions fail, should raise RuntimeError."""
+        mock_rag = MagicMock()
+        mock_rag.aanswer = AsyncMock(side_effect=RuntimeError("total failure"))
+
+        from noid_rag.eval import run_evaluation
+
+        with pytest.raises(RuntimeError, match="All questions failed"):
+            await run_evaluation(
+                dataset_file,
+                eval_config,
+                mock_settings,
+                mock_rag,
+                top_k=3,
+            )
+
     def test_unknown_backend_raises(self):
         from pydantic import ValidationError
 

@@ -67,6 +67,8 @@ class TestVectorStoreConfig:
         assert c.table_name == "documents"
         assert c.embedding_dim == 1536
         assert c.pool_size == 20
+        assert c.max_overflow == 10
+        assert c.pool_timeout == 30
         assert c.hnsw_m == 16
         assert c.hnsw_ef_construction == 64
         assert c.fts_language == "english"
@@ -79,7 +81,12 @@ class TestBatchConfig:
         assert c.retry_min_wait == 1.0
         assert c.retry_max_wait == 60.0
         assert c.continue_on_error is True
+        assert c.concurrency == 1
         assert c.history_dir == "~/.noid-rag/history"
+
+    def test_concurrency_must_be_positive(self):
+        with pytest.raises(Exception):
+            BatchConfig(concurrency=0)
 
 
 class TestLoadYamlConfig:

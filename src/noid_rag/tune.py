@@ -140,6 +140,84 @@ async def _cleanup_tables(table_names: list[str], dsn: str) -> None:
         await engine.dispose()
 
 
+def _setup_trial(
+    trial: Any,
+    search_space: dict[str, dict[str, Any]],
+    settings: Settings,
+    base_table: str,
+) -> tuple[dict[str, dict[str, Any]], Settings, str]:
+    """Suggest params and configure trial settings.
+
+    Returns (trial_params, trial_settings, cache_key).
+    Raises optuna.TrialPruned if embedding dimensions exceed HNSW limit.
+    """
+    import optuna
+
+    trial_params = _suggest_params(trial, search_space)
+    trial_settings = _apply_trial_params(settings, trial_params)
+
+    # Determine ingest cache key
+    chunker_params = trial_params.get("chunker", {})
+    parser_params = trial_params.get("parser", {})
+    embedding_model = trial_params.get("embedding", {}).get("model", settings.embedding.model)
+    cache_key = _ingest_config_hash(chunker_params, embedding_model, parser_params)
+
+    # Resolve embedding dimension and check HNSW compatibility
+    embedding_dim = EMBEDDING_DIM_MAP.get(embedding_model, settings.vectorstore.embedding_dim)
+    if embedding_dim > _HNSW_MAX_DIM:
+        raise optuna.TrialPruned(
+            f"Embedding model {embedding_model!r} produces {embedding_dim} dimensions, "
+            f"which exceeds pgvector's HNSW index limit of {_HNSW_MAX_DIM}. "
+            "Pruning this trial."
+        )
+
+    # Set up temp table
+    table_name = f"{base_table}_tune_{cache_key}"
+    trial_settings = trial_settings.model_copy(
+        update={
+            "vectorstore": trial_settings.vectorstore.model_copy(
+                update={
+                    "table_name": table_name,
+                    "embedding_dim": embedding_dim,
+                }
+            ),
+            "eval": trial_settings.eval.model_copy(update={"save_results": False}),
+        }
+    )
+
+    return trial_params, trial_settings, cache_key
+
+
+async def _ensure_ingested(
+    cache_key: str,
+    sources: list[str],
+    rag: Any,
+    ingest_cache: dict[str, str],
+    table_name: str,
+    temp_tables: list[str],
+) -> None:
+    """Ingest sources if this config hasn't been ingested yet."""
+    if cache_key not in ingest_cache:
+        for source in sources:
+            await rag.aingest(source)
+        ingest_cache[cache_key] = table_name
+        temp_tables.append(table_name)
+
+
+async def _evaluate_trial(
+    rag: Any,
+    dataset_path: str,
+    metric_weights: dict[str, float] | None,
+) -> tuple[float, dict[str, float]]:
+    """Run evaluation and compute composite score.
+
+    Returns (composite_score, mean_scores).
+    """
+    summary = await rag.aeval(dataset_path)
+    score = _compute_composite_score(summary.mean_scores, metric_weights)
+    return score, dict(summary.mean_scores)
+
+
 def run_tune(
     dataset_path: str,
     sources: list[str],
@@ -187,60 +265,41 @@ def run_tune(
             "PostgreSQL's 63-character identifier limit."
         )
 
+    # Create a single event loop for all trials — avoids the overhead of
+    # creating and destroying a loop per trial (which also prevents connection reuse).
+    loop = asyncio.new_event_loop()
+
     def objective(trial: optuna.trial.Trial) -> float:
-        trial_params = _suggest_params(trial, search_space)
-        trial_settings = _apply_trial_params(settings, trial_params)
-
-        # Determine ingest cache key
-        chunker_params = trial_params.get("chunker", {})
-        parser_params = trial_params.get("parser", {})
-        embedding_model = trial_params.get("embedding", {}).get("model", settings.embedding.model)
-        cache_key = _ingest_config_hash(chunker_params, embedding_model, parser_params)
-
-        # Resolve embedding dimension and check HNSW compatibility
-        embedding_dim = EMBEDDING_DIM_MAP.get(embedding_model, settings.vectorstore.embedding_dim)
-        if embedding_dim > _HNSW_MAX_DIM:
-            raise optuna.TrialPruned(
-                f"Embedding model {embedding_model!r} produces {embedding_dim} dimensions, "
-                f"which exceeds pgvector's HNSW index limit of {_HNSW_MAX_DIM}. "
-                "Pruning this trial."
-            )
-
-        # Set up temp table
-        table_name = f"{base_table}_tune_{cache_key}"
-        trial_settings = trial_settings.model_copy(
-            update={
-                "vectorstore": trial_settings.vectorstore.model_copy(
-                    update={
-                        "table_name": table_name,
-                        "embedding_dim": embedding_dim,
-                    }
-                ),
-                "eval": trial_settings.eval.model_copy(update={"save_results": False}),
-            }
+        trial_params, trial_settings, cache_key = _setup_trial(
+            trial, search_space, settings, base_table
         )
 
         from noid_rag.api import NoidRag
 
         rag = NoidRag(config=trial_settings)
+        table_name = trial_settings.vectorstore.table_name
 
-        # Ingest if not cached
-        if cache_key not in ingest_cache:
-            for source in sources:
-                asyncio.run(rag.aingest(source))
-            ingest_cache[cache_key] = table_name
-            temp_tables.append(table_name)
+        try:
+            # Ingest if not cached
+            loop.run_until_complete(
+                _ensure_ingested(cache_key, sources, rag, ingest_cache, table_name, temp_tables)
+            )
 
-        # Evaluate
-        summary = asyncio.run(rag.aeval(dataset_path))
-        score = _compute_composite_score(summary.mean_scores, settings.tune.metric_weights or None)
+            # Evaluate
+            metric_weights = settings.tune.metric_weights or None
+            score, metric_scores = loop.run_until_complete(
+                _evaluate_trial(rag, dataset_path, metric_weights)
+            )
+        finally:
+            # Close shared HTTP clients to avoid ResourceWarning when the loop is closed.
+            loop.run_until_complete(rag.close())
 
         all_trials.append(
             {
                 "trial_number": trial.number,
                 "params": trial_params,
                 "score": score,
-                "metric_scores": dict(summary.mean_scores),
+                "metric_scores": metric_scores,
             }
         )
 
@@ -260,9 +319,10 @@ def run_tune(
         # Clean up temp tables
         if temp_tables and settings.vectorstore.dsn:
             try:
-                asyncio.run(_cleanup_tables(temp_tables, settings.vectorstore.dsn))
+                loop.run_until_complete(_cleanup_tables(temp_tables, settings.vectorstore.dsn))
             except Exception:
                 logger.warning("Failed to clean up temporary tables: %s", temp_tables)
+        loop.close()
 
     if not any(t.state == optuna.trial.TrialState.COMPLETE for t in study.trials):
         raise ValueError(

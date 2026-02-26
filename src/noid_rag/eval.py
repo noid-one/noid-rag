@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import secrets
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -83,13 +85,27 @@ async def run_evaluation(
     answers: list[str] = []
     contexts: list[list[str]] = []
     ground_truths: list[str | None] = []
+    skipped = 0
 
-    for q in questions:
-        result = await rag.aanswer(q.question, top_k=top_k)
+    for i, q in enumerate(questions):
+        try:
+            result = await rag.aanswer(q.question, top_k=top_k)
+        except Exception as exc:
+            skipped += 1
+            logger.warning("Question %d/%d failed, skipping: %s", i + 1, len(questions), exc)
+            continue
         q_texts.append(q.question)
         answers.append(result.answer)
         contexts.append([s.text for s in result.sources])
         ground_truths.append(q.ground_truth)
+
+    if skipped > 0:
+        logger.warning("%d/%d questions skipped due to errors", skipped, len(questions))
+
+    if not q_texts:
+        raise RuntimeError(
+            "All questions failed during evaluation. Check your RAG pipeline configuration."
+        )
 
     if eval_config.backend == "ragas":
         from noid_rag.eval_backends.ragas_backend import run_ragas
@@ -155,8 +171,18 @@ def save_eval_results(summary: EvalSummary, results_dir: str) -> Path | None:
         suffix = secrets.token_hex(4)
         out_path = dir_path / f"eval_{ts}_{suffix}.json"
 
-        with open(out_path, "w") as f:
-            json.dump(asdict(summary), f, indent=2)
+        # Atomic write: temp file + os.replace()
+        fd, tmp_path = tempfile.mkstemp(dir=dir_path, suffix=".json")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(asdict(summary), f, indent=2)
+            os.replace(tmp_path, out_path)
+        except BaseException:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
         return out_path
     except OSError as exc:

@@ -12,7 +12,8 @@ Production RAG CLI and Python library. Parse documents, chunk them, generate emb
 - **Hybrid search** — vector + keyword search with Reciprocal Rank Fusion (RRF)
 - **Batch processing** with progress bars, retry support, and error resilience
 - **Python API** (`NoidRag` class) with sync and async interfaces
-- **Eval & tuning** — evaluate pipeline quality with RAGAS or promptfoo, generate synthetic datasets
+- **Eval & tuning** — evaluate pipeline quality with RAGAS or [promptfoo](https://www.promptfoo.dev/) (external, requires `npx`), generate synthetic datasets
+- **Batch history** — each batch run is saved to `~/.noid-rag/history/` for retry and audit
 - **Fully configurable** — every quality-affecting parameter tunable via YAML, env vars, or both
 
 ## Quick Start
@@ -53,15 +54,23 @@ uv sync --extra local
 
 ### OCR Support
 
-[Docling](https://github.com/DS4SD/docling) is installed automatically and handles document parsing. EasyOCR is included as a core dependency for OCR on scanned PDFs. To use Tesseract instead:
+[Docling](https://github.com/DS4SD/docling) is installed automatically and handles document parsing. EasyOCR is included as a core dependency for OCR on scanned PDFs. To use Tesseract instead, install it as a **system dependency** (it is not a Python package):
 
 ```bash
-# Tesseract (alternative OCR engine)
+# Tesseract (alternative OCR engine — system package, not pip-installable)
 brew install tesseract          # macOS
 sudo apt install tesseract-ocr  # Ubuntu/Debian
 ```
 
 Set `ocr_engine` in your config to `easyocr` (default), `tesseract`, or `auto` (tries easyocr first, falls back to tesseract).
+
+### Promptfoo (optional)
+
+The `promptfoo` eval backend requires [promptfoo](https://www.promptfoo.dev/) to be available via `npx`. It is **not** bundled as a Python dependency:
+
+```bash
+npm install -g promptfoo   # or use npx (auto-installed on first run)
+```
 
 ## Configuration
 

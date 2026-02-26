@@ -160,6 +160,94 @@ class TestBatchProcessor:
         # Only the first file should have been processed
         assert len(result.files) == 1
 
+    @pytest.mark.asyncio
+    async def test_parallel_processing_with_concurrency(self, tmp_path):
+        """With concurrency > 1, all files are processed and results collected."""
+        config = BatchConfig(
+            max_retries=1,
+            retry_min_wait=0.01,
+            retry_max_wait=0.02,
+            concurrency=3,
+            history_dir=str(tmp_path / "history"),
+        )
+        processor = BatchProcessor(config=config)
+
+        files = [tmp_path / f"{i}.pdf" for i in range(5)]
+        for f in files:
+            f.touch()
+
+        mock_fn = AsyncMock(return_value={"chunks_stored": 2, "document_id": "doc_1"})
+        result = await processor.process(files, mock_fn)
+
+        assert result.total == 5
+        assert result.success == 5
+        assert result.failed == 0
+        assert len(result.files) == 5
+        assert mock_fn.call_count == 5
+
+    @pytest.mark.asyncio
+    async def test_parallel_progress_callback_called_for_all_files(self, tmp_path):
+        """Progress callback is called once per file when using concurrency > 1."""
+        config = BatchConfig(
+            max_retries=1,
+            retry_min_wait=0.01,
+            retry_max_wait=0.02,
+            concurrency=2,
+            history_dir=str(tmp_path / "history"),
+        )
+        processor = BatchProcessor(config=config)
+
+        files = [tmp_path / f"{i}.pdf" for i in range(4)]
+        for f in files:
+            f.touch()
+
+        progress_calls: list[tuple[str, int, int]] = []
+
+        def progress(filename, current, total):
+            progress_calls.append((filename, current, total))
+
+        mock_fn = AsyncMock(return_value={"chunks_stored": 1, "document_id": "doc_1"})
+        await processor.process(files, mock_fn, progress=progress)
+
+        assert len(progress_calls) == 4
+        # Every call should report total=4
+        assert all(total == 4 for _, _, total in progress_calls)
+
+    @pytest.mark.asyncio
+    async def test_history_atomic_write(self, tmp_path):
+        """History file should be written atomically (no partial file left on error)."""
+        import json as _json
+        import os
+
+        config = BatchConfig(
+            max_retries=1,
+            retry_min_wait=0.01,
+            retry_max_wait=0.02,
+            history_dir=str(tmp_path / "history"),
+        )
+        processor = BatchProcessor(config=config)
+
+        file = tmp_path / "a.pdf"
+        file.touch()
+
+        mock_fn = AsyncMock(return_value={"chunks_stored": 1, "document_id": "doc_1"})
+        result = await processor.process([file], mock_fn)
+
+        history_dir = Path(processor._history_dir)
+        history_file = history_dir / f"{result.run_id}.json"
+        assert history_file.exists()
+
+        # No orphaned temp files should remain
+        tmp_files = [f for f in history_dir.iterdir() if f.suffix == ".json" and f != history_file]
+        assert tmp_files == [], f"Orphaned temp files found: {tmp_files}"
+
+        # File must be valid JSON
+        data = _json.loads(history_file.read_text())
+        assert data["total"] == 1
+
+        # os.replace is atomic on POSIX; verify the file is the final destination
+        assert os.path.samefile(history_file, history_file)
+
 
 class TestFileResult:
     def test_file_result_creation(self):

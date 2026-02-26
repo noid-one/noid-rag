@@ -39,6 +39,8 @@ class VectorStoreConfig(BaseModel):
     table_name: str = "documents"
     embedding_dim: int = 1536
     pool_size: int = 20
+    max_overflow: int = 10
+    pool_timeout: int = 30
     hnsw_m: int = 16
     hnsw_ef_construction: int = 64
     fts_language: str = "english"
@@ -91,6 +93,7 @@ class BatchConfig(BaseModel):
     retry_min_wait: float = 1.0
     retry_max_wait: float = 60.0
     continue_on_error: bool = True
+    concurrency: int = Field(default=1, ge=1)
     history_dir: str = "~/.noid-rag/history"
 
 

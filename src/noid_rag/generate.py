@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import tempfile
 from pathlib import Path
 from typing import Any, Literal
 
@@ -63,6 +65,7 @@ async def _call_llm(
     chunk_text: str,
     num_questions: int,
     max_tokens: int = 2048,
+    http_client: httpx.AsyncClient | None = None,
 ) -> list[dict[str, str]]:
     """Call the LLM to generate Q&A pairs from a single chunk."""
     prompt = _GENERATION_PROMPT.format(
@@ -70,7 +73,9 @@ async def _call_llm(
         chunk_text=chunk_text,
     )
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    client = http_client or httpx.AsyncClient(timeout=120.0)
+    owns_client = http_client is None
+    try:
         resp = await client.post(
             llm_config.api_url,
             json={
@@ -85,6 +90,9 @@ async def _call_llm(
         )
         resp.raise_for_status()
         data = resp.json()
+    finally:
+        if owns_client:
+            await client.aclose()
 
     content = data["choices"][0]["message"]["content"]
 
@@ -134,25 +142,27 @@ async def generate_qa_pairs(
     all_pairs: list[dict[str, str]] = []
     failure_count = 0
 
-    for i, chunk in enumerate(chunks):
-        if num_questions and len(all_pairs) >= num_questions:
-            break
+    async with httpx.AsyncClient(timeout=120.0) as http_client:
+        for i, chunk in enumerate(chunks):
+            if num_questions and len(all_pairs) >= num_questions:
+                break
 
-        try:
-            pairs = await _call_llm(
-                llm_config,
-                model,
-                chunk["text"],
-                questions_per_chunk,
-                max_tokens=max_tokens,
-            )
-            all_pairs.extend(pairs)
-        except Exception as exc:
-            failure_count += 1
-            logger.warning("Chunk %d/%d failed: %s", i + 1, len(chunks), exc)
+            try:
+                pairs = await _call_llm(
+                    llm_config,
+                    model,
+                    chunk["text"],
+                    questions_per_chunk,
+                    max_tokens=max_tokens,
+                    http_client=http_client,
+                )
+                all_pairs.extend(pairs)
+            except Exception as exc:
+                failure_count += 1
+                logger.warning("Chunk %d/%d failed: %s", i + 1, len(chunks), exc)
 
-        if progress_callback:
-            progress_callback(i)
+            if progress_callback:
+                progress_callback(i)
 
     if failure_count > 0:
         logger.warning("%d/%d chunks failed during generation", failure_count, len(chunks))
@@ -174,12 +184,22 @@ def save_dataset(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     suffix = output_path.suffix.lower()
 
-    if suffix in (".yml", ".yaml"):
-        with open(output_path, "w") as f:
-            yaml.dump(dataset, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
-    else:
-        with open(output_path, "w") as f:
-            json.dump(dataset, f, indent=2, ensure_ascii=False)
+    # Write to temp file then atomically replace
+    fd, tmp_path = tempfile.mkstemp(dir=output_path.parent, suffix=suffix)
+    try:
+        with os.fdopen(fd, "w") as f:
+            if suffix in (".yml", ".yaml"):
+                yaml.dump(dataset, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+            else:
+                json.dump(dataset, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, output_path)
+    except BaseException:
+        # Clean up temp file on any error
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 async def run_generate(
@@ -205,7 +225,7 @@ async def run_generate(
     if num_chunks is None:
         num_chunks = max(1, -(-final_num_questions // qpc))  # ceil division
 
-    chunks = await fetch_chunks(settings.vectorstore, num_chunks, final_strategy)
+    chunks = await fetch_chunks(settings.vectorstore, num_chunks, final_strategy)  # type: ignore[arg-type]
 
     if not chunks:
         raise RuntimeError("No chunks found in the vector store. Ingest documents first.")

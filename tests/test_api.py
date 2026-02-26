@@ -68,12 +68,9 @@ class TestNoidRagChunk:
 class TestNoidRagIngest:
     @pytest.mark.asyncio
     @patch("noid_rag.vectorstore.PgVectorStore")
-    @patch("noid_rag.embeddings.EmbeddingClient")
     @patch("noid_rag.chunker.chunk")
     @patch("noid_rag.parser.parse")
-    async def test_aingest_runs_full_pipeline(
-        self, mock_parse, mock_chunk, mock_embed_cls, mock_store_cls
-    ):
+    async def test_aingest_runs_full_pipeline(self, mock_parse, mock_chunk, mock_store_cls):
         # Set up parser
         mock_doc = Document(id="doc_test", source="/tmp/test.pdf", content="# Test")
         mock_parse.return_value = mock_doc
@@ -85,10 +82,9 @@ class TestNoidRagIngest:
         ]
         mock_chunk.return_value = chunks
 
-        # Set up embedding client
+        # Set up embedding client (mock)
         mock_embed = AsyncMock()
         mock_embed.embed_chunks.return_value = chunks
-        mock_embed_cls.return_value = mock_embed
 
         # Set up vector store
         mock_store = AsyncMock()
@@ -98,6 +94,7 @@ class TestNoidRagIngest:
         mock_store_cls.return_value = mock_store
 
         rag = NoidRag()
+        rag._embed_client = mock_embed
         result = await rag.aingest("/tmp/test.pdf")
 
         assert result["chunks_stored"] == 2
@@ -110,13 +107,11 @@ class TestNoidRagIngest:
 class TestNoidRagSearch:
     @pytest.mark.asyncio
     @patch("noid_rag.vectorstore.PgVectorStore")
-    @patch("noid_rag.embeddings.EmbeddingClient")
-    async def test_asearch_embeds_query_and_searches(self, mock_embed_cls, mock_store_cls):
-        # Set up embedding client
+    async def test_asearch_embeds_query_and_searches(self, mock_store_cls):
+        # Set up embedding client (mock)
         mock_embed = AsyncMock()
         query_embedding = [0.1] * 10
         mock_embed.embed_query.return_value = query_embedding
-        mock_embed_cls.return_value = mock_embed
 
         # Set up vector store
         expected_results = [
@@ -135,6 +130,7 @@ class TestNoidRagSearch:
         mock_store_cls.return_value = mock_store
 
         rag = NoidRag()
+        rag._embed_client = mock_embed
         results = await rag.asearch("test query", top_k=3)
 
         assert len(results) == 1
@@ -180,3 +176,32 @@ class TestNoidRagBatch:
         assert result["success"] == 2
         assert len(result["files"]) == 2
         mock_processor.process.assert_called_once()
+
+
+class TestNoidRagLifecycle:
+    @pytest.mark.asyncio
+    async def test_close_cleans_up_clients(self):
+        rag = NoidRag()
+
+        mock_embed = AsyncMock()
+        mock_embed.close = AsyncMock()
+        mock_llm = AsyncMock()
+        mock_llm.close = AsyncMock()
+
+        rag._embed_client = mock_embed
+        rag._llm_client = mock_llm
+
+        await rag.close()
+
+        mock_embed.close.assert_called_once()
+        mock_llm.close.assert_called_once()
+        assert rag._embed_client is None
+        assert rag._llm_client is None
+
+    @pytest.mark.asyncio
+    async def test_context_manager(self):
+        async with NoidRag() as rag:
+            assert isinstance(rag, NoidRag)
+        # After exit, clients should be None
+        assert rag._embed_client is None
+        assert rag._llm_client is None

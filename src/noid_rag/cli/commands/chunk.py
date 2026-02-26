@@ -27,7 +27,7 @@ def chunk(
         with console.status(f"Parsing {source.name}..."):
             doc = do_parse(source, config=state.settings.parser)
 
-        chunk_config = ChunkerConfig(method=method, max_tokens=max_tokens)
+        chunk_config = ChunkerConfig(method=method, max_tokens=max_tokens)  # type: ignore[arg-type]
         with console.status("Chunking..."):
             chunks = do_chunk(doc, config=chunk_config)
 

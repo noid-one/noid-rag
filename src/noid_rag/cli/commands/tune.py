@@ -48,7 +48,7 @@ def tune_command(
             )
 
         with progress:
-            result = rag.tune(dataset, source, progress_callback=on_progress)
+            result = rag.tune(dataset, source, progress_callback=on_progress)  # type: ignore[arg-type]
 
         # Display results
         from rich.table import Table
