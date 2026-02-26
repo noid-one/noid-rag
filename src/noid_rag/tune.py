@@ -282,7 +282,10 @@ def run_tune(
 
     search_space = settings.tune.search_space
     if not search_space:
-        raise ValueError("No search space defined. Set tune.search_space in your config YAML.")
+        raise ValueError(
+            "No search space defined. Set tune.search_space in your config YAML. "
+            "See config.pgvector.yml or config.qdrant.yml for examples."
+        )
 
     max_trials = settings.tune.max_trials
     ingest_cache: dict[str, str] = {}  # hash -> store_name

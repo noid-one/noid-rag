@@ -118,9 +118,24 @@ class EvalConfig(BaseModel):
     judge_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
 
 
+def _default_search_space() -> dict[str, dict[str, Any]]:
+    return {
+        "chunker": {
+            "max_tokens": [256, 512, 1024],
+            "method": ["hybrid", "fixed"],
+        },
+        "search": {
+            "top_k": [3, 5, 10, 15],
+        },
+        "llm": {
+            "temperature": {"low": 0.0, "high": 0.3, "step": 0.1},
+        },
+    }
+
+
 class TuneConfig(BaseModel):
     max_trials: int = Field(default=30, gt=0)
-    search_space: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    search_space: dict[str, dict[str, Any]] = Field(default_factory=_default_search_space)
     metric_weights: dict[str, float] = Field(default_factory=dict)
 
     @field_validator("metric_weights")

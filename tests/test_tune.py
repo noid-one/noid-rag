@@ -516,16 +516,27 @@ def test_missing_optuna_raises():
 
 
 def test_empty_search_space_raises():
-    """Empty search space should raise ValueError."""
+    """Explicitly empty search space should raise ValueError."""
     pytest.importorskip("optuna")
 
     from noid_rag.tune import run_tune
 
     settings = Settings()
-    # search_space defaults to empty dict
+    settings.tune.search_space = {}
 
     with pytest.raises(ValueError, match="No search space defined"):
         run_tune("test.yml", ["doc.pdf"], settings)
+
+
+def test_default_search_space_is_populated():
+    """TuneConfig should ship a sensible default search space."""
+    from noid_rag.config import TuneConfig
+
+    cfg = TuneConfig()
+    assert cfg.search_space, "Default search space should not be empty"
+    assert "chunker" in cfg.search_space
+    assert "search" in cfg.search_space
+    assert "llm" in cfg.search_space
 
 
 def test_all_trials_pruned_raises():
