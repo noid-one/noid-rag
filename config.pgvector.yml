@@ -1,0 +1,149 @@
+# ──────────────────────────────────────────────────────
+# noid-rag configuration — pgvector backend
+# Copy to ~/.noid-rag/config.yml and edit to your needs
+# ──────────────────────────────────────────────────────
+
+parser:
+  # Enable OCR to extract text from scanned PDFs and images.
+  # Set to false if your documents are already text-based (faster).
+  ocr_enabled: true
+
+  # Which OCR engine to use. "easyocr" works out of the box.
+  ocr_engine: easyocr
+
+  # Maximum number of pages to process per document.
+  # 0 = no limit (process all pages). Useful for testing with large PDFs.
+  max_pages: 0
+
+chunker:
+  # How to split documents into smaller pieces (chunks) for search.
+  #   "hybrid"  — (recommended) uses document structure (headings, paragraphs,
+  #               tables) to create semantically meaningful chunks.
+  #   "fixed"   — simple sliding-window: cuts text into equal-sized pieces.
+  method: hybrid
+
+  # Maximum size of each chunk, in tokens (roughly 3/4 of a word each).
+  # Smaller chunks = more precise search results, but less context per chunk.
+  # Larger chunks  = more context, but search may be less focused.
+  #   Recommended: 256–512 for most embedding models.
+  max_tokens: 512
+
+  # The tokenizer to use when counting tokens for chunk sizes.
+  tokenizer: BAAI/bge-small-en-v1.5
+
+  # (Only used with method: fixed)
+  # How many tokens of overlap between consecutive chunks.
+  # Recommended: 10–15% of max_tokens.
+  overlap: 50
+
+embedding:
+  # The API provider for converting text into numeric vectors (embeddings).
+  provider: openrouter
+
+  # The endpoint URL for the embeddings API (OpenAI-compatible).
+  api_url: https://openrouter.ai/api/v1/embeddings
+
+  # Which embedding model to use.
+  #   "openai/text-embedding-3-small" — 1536 dimensions, good balance of quality & cost.
+  #   "openai/text-embedding-3-large" — 3072 dimensions, higher quality but slower.
+  # NOTE: pgvector HNSW indexes degrade above ~2000 dimensions.
+  #       text-embedding-3-small (1536) is the recommended choice for pgvector.
+  model: openai/text-embedding-3-small
+
+  # How many text chunks to send per API call.
+  batch_size: 64
+
+vectorstore:
+  # Backend provider. This file is configured for pgvector.
+  provider: pgvector
+
+  # PostgreSQL connection string. Requires the pgvector extension installed.
+  # Format: postgresql+asyncpg://USER:PASSWORD@HOST:PORT/DATABASE
+  dsn: postgresql+asyncpg://user:pass@localhost:5432/noid_rag
+
+  # Name of the database table where chunks and their embeddings are stored.
+  table_name: documents
+
+  # The number of dimensions in each embedding vector.
+  # MUST match the output of your chosen embedding model:
+  #   text-embedding-3-small -> 1536
+  #   text-embedding-3-large -> 3072 (not recommended for pgvector)
+  embedding_dim: 1536
+
+  # Number of database connections kept open and ready to use.
+  # 5–10 is fine for personal use. Increase for heavy concurrent workloads.
+  pool_size: 20
+
+  # HNSW index parameters (affect index build time and search quality).
+  #   hnsw_m: max connections per node (higher = better recall, slower build).
+  #   hnsw_ef_construction: search width during build (higher = better recall, slower build).
+  hnsw_m: 16
+  hnsw_ef_construction: 100
+
+  # PostgreSQL full-text search language configuration.
+  # Controls how text is tokenized and stemmed for keyword (hybrid) search.
+  # Common values: "english", "spanish", "french", "german", "simple" (no stemming).
+  fts_language: english
+
+search:
+  # How many chunks to retrieve per search query.
+  top_k: 5
+
+  # Reciprocal Rank Fusion constant for merging vector + keyword results.
+  # Lower values favor top-ranked results more aggressively.
+  # Typical range: 1–100. Default (60) works well for most use cases.
+  rrf_k: 60
+
+llm:
+  # The endpoint URL for the chat completions API (OpenAI-compatible).
+  api_url: https://openrouter.ai/api/v1/chat/completions
+
+  # Which LLM generates the final answer from the retrieved chunks.
+  model: openai/gpt-4o-mini
+
+  # Maximum number of tokens the LLM can generate in its answer.
+  max_tokens: 1024
+
+  # Controls randomness (0.0 = deterministic, 2.0 = very creative).
+  # For RAG, 0.0 is recommended.
+  temperature: 0.0
+
+  # System prompt sent to the LLM before each question.
+  # system_prompt: "You are a helpful assistant. Answer based ONLY on the provided context."
+
+generate:
+  # Maximum tokens for each LLM call when generating Q&A pairs.
+  max_tokens: 2048
+
+batch:
+  # How many times to retry a failed operation (e.g., API timeout).
+  max_retries: 3
+
+  # If one file fails during batch processing, keep going with the rest.
+  continue_on_error: true
+
+tune:
+  # Maximum number of Optuna trials to evaluate.
+  max_trials: 10
+
+  search_space:
+    chunker:
+      max_tokens: [256, 512, 1024]
+      method: [hybrid, fixed]
+
+    search:
+      top_k: [3, 5, 10, 15]
+      rrf_k: [20, 40, 60, 80]
+
+    llm:
+      temperature: {low: 0.0, high: 0.3, step: 0.1}
+
+    embedding:
+      # pgvector works best with text-embedding-3-small (1536 dims).
+      # text-embedding-3-large (3072 dims) will be auto-pruned due to HNSW limits.
+      model: [openai/text-embedding-3-small]
+
+  # metric_weights:
+  #   context_precision: 2.0
+  #   faithfulness: 1.0
+  #   answer_relevancy: 1.0

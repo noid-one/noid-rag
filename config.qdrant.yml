@@ -1,0 +1,157 @@
+# ──────────────────────────────────────────────────────
+# noid-rag configuration — Qdrant backend
+# Copy to ~/.noid-rag/config.yml and edit to your needs
+#
+# Requires: pip install 'noid-rag[qdrant]'
+# Start Qdrant:
+#   docker run -d --name qdrant -p 6333:6333 -p 6334:6334 \
+#     -v qdrant_storage:/qdrant/storage qdrant/qdrant
+# Dashboard: http://localhost:6333/dashboard
+# ──────────────────────────────────────────────────────
+
+parser:
+  # Enable OCR to extract text from scanned PDFs and images.
+  # Set to false if your documents are already text-based (faster).
+  ocr_enabled: true
+
+  # Which OCR engine to use. "easyocr" works out of the box.
+  ocr_engine: easyocr
+
+  # Maximum number of pages to process per document.
+  # 0 = no limit (process all pages). Useful for testing with large PDFs.
+  max_pages: 0
+
+chunker:
+  # How to split documents into smaller pieces (chunks) for search.
+  #   "hybrid"  — (recommended) uses document structure (headings, paragraphs,
+  #               tables) to create semantically meaningful chunks.
+  #   "fixed"   — simple sliding-window: cuts text into equal-sized pieces.
+  method: hybrid
+
+  # Maximum size of each chunk, in tokens (roughly 3/4 of a word each).
+  # Smaller chunks = more precise search results, but less context per chunk.
+  # Larger chunks  = more context, but search may be less focused.
+  #   Recommended: 256–512 for most embedding models.
+  max_tokens: 512
+
+  # The tokenizer to use when counting tokens for chunk sizes.
+  tokenizer: BAAI/bge-small-en-v1.5
+
+  # (Only used with method: fixed)
+  # How many tokens of overlap between consecutive chunks.
+  # Recommended: 10–15% of max_tokens.
+  overlap: 50
+
+embedding:
+  # The API provider for converting text into numeric vectors (embeddings).
+  provider: openrouter
+
+  # The endpoint URL for the embeddings API (OpenAI-compatible).
+  api_url: https://openrouter.ai/api/v1/embeddings
+
+  # Which embedding model to use.
+  #   "openai/text-embedding-3-small" — 1536 dimensions, good balance of quality & cost.
+  #   "openai/text-embedding-3-large" — 3072 dimensions, higher quality.
+  # Qdrant handles high-dimensional vectors natively with no HNSW degradation,
+  # so text-embedding-3-large is recommended for best search quality.
+  model: openai/text-embedding-3-large
+
+  # How many text chunks to send per API call.
+  batch_size: 64
+
+vectorstore:
+  # Backend provider. This file is configured for Qdrant.
+  provider: qdrant
+
+  # The number of dimensions in each embedding vector.
+  # MUST match the output of your chosen embedding model:
+  #   text-embedding-3-small -> 1536
+  #   text-embedding-3-large -> 3072
+  embedding_dim: 3072
+
+qdrant:
+  # Qdrant server URL. Default port is 6333 (REST) and 6334 (gRPC).
+  url: http://localhost:6333
+
+  # Collection name where chunks and embeddings are stored.
+  # Created automatically on first ingest.
+  collection_name: documents
+
+  # API key for Qdrant authentication (leave empty for local instances).
+  # api_key: your-api-key-here
+
+  # Use gRPC instead of HTTP for faster communication.
+  # Requires the grpcio package to be installed.
+  prefer_grpc: false
+
+  # Client timeout in seconds.
+  timeout: 30
+
+  # HNSW index parameters (affect index build time and search quality).
+  #   hnsw_m: max connections per node (higher = better recall, slower build).
+  #   hnsw_ef_construction: search width during build (higher = better recall, slower build).
+  # Qdrant handles high dimensions well, so these can be tuned aggressively.
+  hnsw_m: 16
+  hnsw_ef_construction: 128
+
+search:
+  # How many chunks to retrieve per search query.
+  top_k: 5
+
+  # Reciprocal Rank Fusion constant.
+  # Note: Qdrant uses its own built-in RRF fusion for hybrid search,
+  # so this value is accepted for compatibility but not forwarded to Qdrant.
+  rrf_k: 60
+
+llm:
+  # The endpoint URL for the chat completions API (OpenAI-compatible).
+  api_url: https://openrouter.ai/api/v1/chat/completions
+
+  # Which LLM generates the final answer from the retrieved chunks.
+  model: openai/gpt-4o-mini
+
+  # Maximum number of tokens the LLM can generate in its answer.
+  max_tokens: 1024
+
+  # Controls randomness (0.0 = deterministic, 2.0 = very creative).
+  # For RAG, 0.0 is recommended.
+  temperature: 0.0
+
+  # System prompt sent to the LLM before each question.
+  # system_prompt: "You are a helpful assistant. Answer based ONLY on the provided context."
+
+generate:
+  # Maximum tokens for each LLM call when generating Q&A pairs.
+  max_tokens: 2048
+
+batch:
+  # How many times to retry a failed operation (e.g., API timeout).
+  max_retries: 3
+
+  # If one file fails during batch processing, keep going with the rest.
+  continue_on_error: true
+
+tune:
+  # Maximum number of Optuna trials to evaluate.
+  max_trials: 10
+
+  search_space:
+    chunker:
+      max_tokens: [256, 512, 1024]
+      method: [hybrid, fixed]
+
+    search:
+      top_k: [3, 5, 10, 15]
+
+    llm:
+      temperature: {low: 0.0, high: 0.3, step: 0.1}
+
+    embedding:
+      # Qdrant handles all dimensions natively — no HNSW limit.
+      # Both models can be explored without pruning.
+      model: [openai/text-embedding-3-small, openai/text-embedding-3-large]
+
+  # metric_weights:
+  #   context_precision: 2.0
+  #   faithfulness: 1.0
+  #   answer_relevancy: 1.0

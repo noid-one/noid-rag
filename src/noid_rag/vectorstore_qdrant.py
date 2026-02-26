@@ -27,7 +27,7 @@ def _import_qdrant() -> tuple[Any, Any]:
     except ImportError:
         raise ImportError(
             "qdrant-client is required for the Qdrant backend. "
-            "Install with: pip install 'noid-rag[qdrant]'"
+            "Install with: uv pip install 'noid-rag[qdrant]'"
         ) from None
 
 
@@ -142,6 +142,9 @@ class QdrantVectorStore:
                 id=self._to_uuid(chunk.id),
                 vector={
                     _DENSE_VECTOR_NAME: chunk.embedding,
+                    _SPARSE_VECTOR_NAME: m.Document(
+                        text=chunk.text, model="Qdrant/bm25"
+                    ),
                 },
                 payload={
                     "chunk_id": chunk.id,
@@ -259,7 +262,7 @@ class QdrantVectorStore:
 
         results = await client.query_points(
             collection_name=self.config.collection_name,
-            query=m.Document(text=query),
+            query=m.Document(text=query, model="Qdrant/bm25"),
             using=_SPARSE_VECTOR_NAME,
             limit=top_k,
             query_filter=query_filter,
@@ -296,7 +299,7 @@ class QdrantVectorStore:
                     filter=query_filter,
                 ),
                 m.Prefetch(
-                    query=m.Document(text=query),
+                    query=m.Document(text=query, model="Qdrant/bm25"),
                     using=_SPARSE_VECTOR_NAME,
                     limit=top_k,
                     filter=query_filter,
