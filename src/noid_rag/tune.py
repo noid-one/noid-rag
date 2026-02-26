@@ -30,9 +30,17 @@ EMBEDDING_DIM_MAP: dict[str, int] = {
 _HNSW_MAX_DIM = 2000
 
 
-def _ingest_config_hash(chunker_params: dict[str, Any], embedding_model: str) -> str:
-    """Deterministic hash of chunker + embedding combo for table naming."""
-    payload = {"chunker": chunker_params, "embedding_model": embedding_model}
+def _ingest_config_hash(
+    chunker_params: dict[str, Any],
+    embedding_model: str,
+    parser_params: dict[str, Any] | None = None,
+) -> str:
+    """Deterministic hash of parser + chunker + embedding combo for table naming."""
+    payload = {
+        "chunker": chunker_params,
+        "embedding_model": embedding_model,
+        "parser": parser_params or {},
+    }
     key = json.dumps(payload, sort_keys=True)
     return hashlib.sha256(key.encode()).hexdigest()[:8]
 
@@ -185,8 +193,9 @@ def run_tune(
 
         # Determine ingest cache key
         chunker_params = trial_params.get("chunker", {})
+        parser_params = trial_params.get("parser", {})
         embedding_model = trial_params.get("embedding", {}).get("model", settings.embedding.model)
-        cache_key = _ingest_config_hash(chunker_params, embedding_model)
+        cache_key = _ingest_config_hash(chunker_params, embedding_model, parser_params)
 
         # Resolve embedding dimension and check HNSW compatibility
         embedding_dim = EMBEDDING_DIM_MAP.get(embedding_model, settings.vectorstore.embedding_dim)

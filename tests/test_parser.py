@@ -137,6 +137,92 @@ class TestParser:
         assert doc.content == "default"
 
 
+class TestParserMaxPages:
+    @patch.dict(sys.modules, _docling_mocks())
+    def test_max_pages_truncates_content(self, tmp_path):
+        pages_content = "Page 1 content<!-- PageBreak -->Page 2 content<!-- PageBreak -->Page 3"
+        _setup_converter(
+            sys.modules,
+            md_content=pages_content,
+            pages=[MagicMock(), MagicMock(), MagicMock()],
+        )
+
+        test_file = tmp_path / "test.pdf"
+        test_file.write_bytes(b"fake pdf")
+
+        from noid_rag.parser import parse
+
+        config = ParserConfig(max_pages=2)
+        doc = parse(test_file, config=config)
+
+        assert "Page 1 content" in doc.content
+        assert "Page 2 content" in doc.content
+        assert "Page 3" not in doc.content
+        assert doc.metadata["page_count"] == 2
+
+    @patch.dict(sys.modules, _docling_mocks())
+    def test_max_pages_zero_means_no_limit(self, tmp_path):
+        pages_content = "Page 1<!-- PageBreak -->Page 2<!-- PageBreak -->Page 3"
+        _setup_converter(
+            sys.modules,
+            md_content=pages_content,
+            pages=[MagicMock(), MagicMock(), MagicMock()],
+        )
+
+        test_file = tmp_path / "test.pdf"
+        test_file.write_bytes(b"fake pdf")
+
+        from noid_rag.parser import parse
+
+        config = ParserConfig(max_pages=0)
+        doc = parse(test_file, config=config)
+
+        assert "Page 3" in doc.content
+        assert doc.metadata["page_count"] == 3
+
+    @patch.dict(sys.modules, _docling_mocks())
+    def test_max_pages_warns_when_no_markers(self, tmp_path, caplog):
+        import logging
+
+        _setup_converter(
+            sys.modules,
+            md_content="No page breaks here",
+            pages=[MagicMock()],
+        )
+
+        test_file = tmp_path / "test.pdf"
+        test_file.write_bytes(b"fake pdf")
+
+        from noid_rag.parser import parse
+
+        config = ParserConfig(max_pages=2)
+        with caplog.at_level(logging.WARNING, logger="noid_rag.parser"):
+            doc = parse(test_file, config=config)
+
+        assert doc.content == "No page breaks here"
+        assert any("no page-break markers" in r.message for r in caplog.records)
+
+    @patch.dict(sys.modules, _docling_mocks())
+    def test_max_pages_updates_metadata(self, tmp_path):
+        pages_content = "P1<!-- PageBreak -->P2<!-- PageBreak -->P3<!-- PageBreak -->P4"
+        _setup_converter(
+            sys.modules,
+            md_content=pages_content,
+            pages=[MagicMock(), MagicMock(), MagicMock(), MagicMock()],
+        )
+
+        test_file = tmp_path / "test.pdf"
+        test_file.write_bytes(b"fake pdf")
+
+        from noid_rag.parser import parse
+
+        config = ParserConfig(max_pages=1)
+        doc = parse(test_file, config=config)
+
+        assert doc.metadata["page_count"] == 1
+        assert "P2" not in doc.content
+
+
 class TestParserOcrConfig:
     """Tests that exercise real docling classes to catch API mismatches."""
 

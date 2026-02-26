@@ -36,6 +36,24 @@ def test_ingest_config_hash_differs_on_change():
     assert h1 != h3
 
 
+def test_ingest_config_hash_differs_with_parser_params():
+    from noid_rag.tune import _ingest_config_hash
+
+    h1 = _ingest_config_hash({"max_tokens": 512}, "openai/text-embedding-3-small")
+    h2 = _ingest_config_hash(
+        {"max_tokens": 512}, "openai/text-embedding-3-small", {"max_pages": 10}
+    )
+    assert h1 != h2
+
+
+def test_ingest_config_hash_none_equals_empty_parser():
+    from noid_rag.tune import _ingest_config_hash
+
+    h1 = _ingest_config_hash({"max_tokens": 512}, "openai/text-embedding-3-small", None)
+    h2 = _ingest_config_hash({"max_tokens": 512}, "openai/text-embedding-3-small", {})
+    assert h1 == h2
+
+
 # --- _suggest_params ---
 
 

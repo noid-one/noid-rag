@@ -119,6 +119,55 @@ class PgVectorStore:
                 )
         return len(chunks)
 
+    async def replace_document(self, document_id: str, chunks: list[Chunk]) -> tuple[int, int]:
+        """Delete old chunks and insert new ones atomically within a single transaction.
+
+        If any chunk is missing an embedding, a ValueError is raised and the
+        transaction is rolled back — leaving the original document unchanged.
+
+        Returns (deleted, inserted).
+        """
+        table = self.config.table_name
+        now = datetime.now(timezone.utc)
+        async with self._engine.begin() as conn:
+            result = await conn.execute(
+                text(f"DELETE FROM {table} WHERE document_id = :doc_id"),
+                {"doc_id": document_id},
+            )
+            deleted = result.rowcount
+            for chunk in chunks:
+                if chunk.embedding is None:
+                    raise ValueError(f"Chunk {chunk.id} has no embedding")
+                embedding_str = "[" + ",".join(str(v) for v in chunk.embedding) + "]"
+                await conn.execute(
+                    text(f"""
+                        INSERT INTO {table}
+                            (id, document_id, text, embedding, metadata,
+                             created_at, updated_at, tsv)
+                        VALUES
+                            (:id, :doc_id, :text, CAST(:embedding AS vector),
+                             CAST(:metadata AS jsonb), :created_at, :updated_at,
+                             to_tsvector(:fts_lang, :text))
+                        ON CONFLICT (id) DO UPDATE SET
+                            text = EXCLUDED.text,
+                            embedding = EXCLUDED.embedding,
+                            metadata = EXCLUDED.metadata,
+                            updated_at = EXCLUDED.updated_at,
+                            tsv = to_tsvector(:fts_lang, EXCLUDED.text)
+                    """),
+                    {
+                        "id": chunk.id,
+                        "doc_id": chunk.document_id,
+                        "text": chunk.text,
+                        "embedding": embedding_str,
+                        "metadata": json.dumps(chunk.metadata),
+                        "created_at": now,
+                        "updated_at": now,
+                        "fts_lang": self.config.fts_language,
+                    },
+                )
+        return deleted, len(chunks)
+
     async def search(
         self,
         embedding: list[float],

@@ -180,9 +180,9 @@ noid-rag batch ./docs/ --retry <run-id>      # Retry failed files from a previou
 ### `generate` — Generate synthetic eval datasets
 
 ```bash
-noid-rag generate dataset.yml                   # Generate from indexed docs
-noid-rag generate dataset.yml --num-questions 50
-noid-rag generate dataset.yml --strategy random  # random or diverse sampling
+noid-rag generate -o dataset.yml                    # Generate from indexed docs
+noid-rag generate -o dataset.yml --num-questions 50
+noid-rag generate -o dataset.yml --strategy random  # random or diverse sampling
 ```
 
 ### `eval` — Evaluate RAG pipeline quality

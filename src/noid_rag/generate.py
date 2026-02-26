@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Literal
 
@@ -11,6 +12,8 @@ import yaml
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential_jitter
 
 from noid_rag.config import LLMConfig, Settings, VectorStoreConfig
+
+logger = logging.getLogger(__name__)
 
 _GENERATION_PROMPT = """\
 You are an expert question-answer pair generator for evaluating \
@@ -129,6 +132,7 @@ async def generate_qa_pairs(
         List of {"question": ..., "ground_truth": ...} dicts.
     """
     all_pairs: list[dict[str, str]] = []
+    failure_count = 0
 
     for i, chunk in enumerate(chunks):
         if num_questions and len(all_pairs) >= num_questions:
@@ -143,12 +147,15 @@ async def generate_qa_pairs(
                 max_tokens=max_tokens,
             )
             all_pairs.extend(pairs)
-        except Exception:
-            # Skip chunks that fail after retries
-            pass
+        except Exception as exc:
+            failure_count += 1
+            logger.warning("Chunk %d/%d failed: %s", i + 1, len(chunks), exc)
 
         if progress_callback:
             progress_callback(i)
+
+    if failure_count > 0:
+        logger.warning("%d/%d chunks failed during generation", failure_count, len(chunks))
 
     # Trim to exact count if specified
     if num_questions and len(all_pairs) > num_questions:

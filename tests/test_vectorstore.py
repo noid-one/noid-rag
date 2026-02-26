@@ -174,6 +174,72 @@ class TestPgVectorStoreSearch:
         assert results[0].metadata == {"key": "value"}
 
 
+class TestPgVectorStoreReplaceDocument:
+    @pytest.fixture
+    def config(self):
+        return VectorStoreConfig(dsn="postgresql+asyncpg://test@localhost/test", embedding_dim=10)
+
+    @pytest.mark.asyncio
+    async def test_replace_document_deletes_then_inserts(self, config):
+        store = PgVectorStore(config=config)
+
+        mock_delete_result = MagicMock()
+        mock_delete_result.rowcount = 3
+
+        mock_conn = AsyncMock()
+        mock_conn.execute.return_value = mock_delete_result
+
+        store._engine = MagicMock()
+        store._engine.begin.return_value = _make_async_cm(mock_conn)
+
+        chunks = [
+            Chunk(text="new chunk 1", document_id="doc_1", embedding=[0.1] * 10),
+            Chunk(text="new chunk 2", document_id="doc_1", embedding=[0.2] * 10),
+        ]
+
+        deleted, upserted = await store.replace_document("doc_1", chunks)
+        assert deleted == 3
+        assert upserted == 2
+        # 1 DELETE + 2 INSERTs
+        assert mock_conn.execute.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_replace_document_empty_chunks_only_deletes(self, config):
+        store = PgVectorStore(config=config)
+
+        mock_delete_result = MagicMock()
+        mock_delete_result.rowcount = 2
+
+        mock_conn = AsyncMock()
+        mock_conn.execute.return_value = mock_delete_result
+
+        store._engine = MagicMock()
+        store._engine.begin.return_value = _make_async_cm(mock_conn)
+
+        deleted, upserted = await store.replace_document("doc_1", [])
+        assert deleted == 2
+        assert upserted == 0
+        # Should still go through begin() transaction, with just the DELETE
+        assert mock_conn.execute.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_replace_document_raises_on_missing_embedding(self, config):
+        store = PgVectorStore(config=config)
+
+        mock_delete_result = MagicMock()
+        mock_delete_result.rowcount = 1
+
+        mock_conn = AsyncMock()
+        mock_conn.execute.return_value = mock_delete_result
+
+        store._engine = MagicMock()
+        store._engine.begin.return_value = _make_async_cm(mock_conn)
+
+        chunks = [Chunk(text="no embedding", document_id="doc_1", embedding=None)]
+        with pytest.raises(ValueError, match="no embedding"):
+            await store.replace_document("doc_1", chunks)
+
+
 class TestPgVectorStoreDelete:
     @pytest.mark.asyncio
     async def test_delete_by_document_id(self):

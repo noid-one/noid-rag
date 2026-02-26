@@ -92,7 +92,7 @@ class TestNoidRagIngest:
 
         # Set up vector store
         mock_store = AsyncMock()
-        mock_store.upsert.return_value = 2
+        mock_store.replace_document.return_value = (1, 2)
         mock_store.__aenter__ = AsyncMock(return_value=mock_store)
         mock_store.__aexit__ = AsyncMock(return_value=False)
         mock_store_cls.return_value = mock_store
@@ -101,9 +101,10 @@ class TestNoidRagIngest:
         result = await rag.aingest("/tmp/test.pdf")
 
         assert result["chunks_stored"] == 2
+        assert result["chunks_deleted"] == 1
         assert result["document_id"] == "doc_test"
         mock_embed.embed_chunks.assert_called_once_with(chunks)
-        mock_store.upsert.assert_called_once_with(chunks)
+        mock_store.replace_document.assert_called_once_with("doc_test", chunks)
 
 
 class TestNoidRagSearch:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,6 +12,8 @@ from typing import TYPE_CHECKING
 import yaml
 
 from noid_rag.models import EvalQuestion, EvalResult, EvalSummary
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from noid_rag.api import NoidRag
@@ -140,18 +143,22 @@ def _compute_mean_scores(results: list[EvalResult]) -> dict[str, float]:
     return {m: totals[m] / counts[m] for m in totals}
 
 
-def save_eval_results(summary: EvalSummary, results_dir: str) -> Path:
-    """Save evaluation results as timestamped JSON."""
+def save_eval_results(summary: EvalSummary, results_dir: str) -> Path | None:
+    """Save evaluation results as timestamped JSON. Returns None on filesystem errors."""
     from dataclasses import asdict
 
-    dir_path = Path(results_dir).expanduser()
-    dir_path.mkdir(parents=True, exist_ok=True)
+    try:
+        dir_path = Path(results_dir).expanduser()
+        dir_path.mkdir(parents=True, exist_ok=True)
 
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    suffix = secrets.token_hex(4)
-    out_path = dir_path / f"eval_{ts}_{suffix}.json"
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        suffix = secrets.token_hex(4)
+        out_path = dir_path / f"eval_{ts}_{suffix}.json"
 
-    with open(out_path, "w") as f:
-        json.dump(asdict(summary), f, indent=2)
+        with open(out_path, "w") as f:
+            json.dump(asdict(summary), f, indent=2)
 
-    return out_path
+        return out_path
+    except OSError as exc:
+        logger.warning("Could not save eval results to %s: %s", results_dir, exc)
+        return None

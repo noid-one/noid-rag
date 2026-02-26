@@ -139,9 +139,9 @@ class NoidRag:
         await embed_client.embed_chunks(chunks)
 
         async with PgVectorStore(config=self.settings.vectorstore) as store:
-            count = await store.upsert(chunks)
+            deleted, count = await store.replace_document(doc.id, chunks)
 
-        return {"chunks_stored": count, "document_id": doc.id}
+        return {"chunks_stored": count, "chunks_deleted": deleted, "document_id": doc.id}
 
     async def asearch(self, query: str, top_k: int | None = None) -> list[SearchResult]:
         """Async: hybrid search (vector + keyword with RRF)."""

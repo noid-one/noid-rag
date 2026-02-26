@@ -385,6 +385,29 @@ class TestPromptfooBackend:
 
 
 class TestSaveResults:
+    def test_returns_none_on_permission_error(self, tmp_path, caplog):
+        import logging
+
+        from noid_rag.eval import save_eval_results
+
+        summary = EvalSummary(
+            results=[],
+            mean_scores={},
+            backend="ragas",
+            model="test-model",
+            total_questions=0,
+            dataset_path="test.yml",
+        )
+
+        with (
+            patch("pathlib.Path.mkdir", side_effect=PermissionError("read-only")),
+            caplog.at_level(logging.WARNING, logger="noid_rag.eval"),
+        ):
+            result = save_eval_results(summary, str(tmp_path / "restricted"))
+
+        assert result is None
+        assert any("Could not save eval results" in r.message for r in caplog.records)
+
     def test_round_trip(self, tmp_path):
         from noid_rag.eval import save_eval_results
 
