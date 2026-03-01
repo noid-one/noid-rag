@@ -37,7 +37,7 @@ class EmbeddingConfig(BaseModel):
 
 
 class VectorStoreConfig(BaseModel):
-    provider: Literal["pgvector", "qdrant"] = "pgvector"
+    provider: Literal["pgvector", "qdrant", "zvec"] = "pgvector"
     dsn: str = ""
     table_name: str = "documents"
     embedding_dim: int = 1536
@@ -150,6 +150,27 @@ class TuneConfig(BaseModel):
         return v
 
 
+class ZvecConfig(BaseModel):
+    data_dir: str = "~/.noid-rag/zvec"
+    collection_name: str = "documents"
+    index_type: Literal["hnsw", "flat"] = "hnsw"
+    hnsw_m: int = 16
+    hnsw_ef_construction: int = 200
+
+    @field_validator("collection_name")
+    @classmethod
+    def _validate_collection_name(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("collection_name must not be empty")
+        if not _SAFE_COLLECTION_RE.match(v):
+            raise ValueError(
+                f"collection_name {v!r} contains invalid characters. "
+                "Use only letters, digits, underscores, and hyphens, "
+                "starting with a letter or underscore."
+            )
+        return v
+
+
 class QdrantConfig(BaseModel):
     url: str = "http://localhost:6333"
     api_key: SecretStr = SecretStr("")
@@ -203,6 +224,7 @@ class Settings(BaseSettings):
     eval: EvalConfig = Field(default_factory=EvalConfig)
     tune: TuneConfig = Field(default_factory=TuneConfig)
     qdrant: QdrantConfig = Field(default_factory=QdrantConfig)
+    zvec: ZvecConfig = Field(default_factory=ZvecConfig)
 
     config_file: Path | None = None
     verbose: bool = False

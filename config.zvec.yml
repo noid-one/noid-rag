@@ -1,0 +1,92 @@
+# ──────────────────────────────────────────────────────
+# noid-rag configuration — zvec backend (experimental)
+# Copy to ~/.noid-rag/config.yml and edit to your needs
+#
+# Requires: pip install 'noid-rag[zvec]'
+# No server needed — zvec stores data on the local filesystem.
+# Python 3.11-3.12 only (zvec SDK limitation).
+# ──────────────────────────────────────────────────────
+
+parser:
+  ocr_enabled: true
+  ocr_engine: easyocr
+  max_pages: 0
+
+chunker:
+  method: hybrid
+  max_tokens: 512
+  tokenizer: BAAI/bge-small-en-v1.5
+  overlap: 50
+
+embedding:
+  # Use zvec's built-in local embeddings (all-MiniLM-L6-v2, 384 dims).
+  # No API key needed — the model auto-downloads on first use (~80MB).
+  provider: zvec
+
+  # These fields are ignored when provider is "zvec" but kept for reference
+  # in case you switch to API-based embeddings later.
+  # api_url: https://openrouter.ai/api/v1/embeddings
+  # model: openai/text-embedding-3-small
+
+  batch_size: 64
+
+vectorstore:
+  # Backend provider. This file is configured for zvec.
+  provider: zvec
+
+  # The number of dimensions in each embedding vector.
+  # MUST match the output of your chosen embedding model:
+  #   zvec local (all-MiniLM-L6-v2) -> 384
+  #   text-embedding-3-small         -> 1536
+  #   text-embedding-3-large         -> 3072
+  embedding_dim: 384
+
+zvec:
+  # Directory where zvec stores collection data on disk.
+  # Created automatically on first ingest.
+  data_dir: ~/.noid-rag/zvec
+
+  # Collection name (subdirectory under data_dir).
+  collection_name: documents
+
+  # Index type for approximate nearest neighbor search.
+  #   "hnsw" — (recommended) fast approximate search, good for most use cases.
+  #   "flat"  — exact brute-force search, best for very small collections.
+  index_type: hnsw
+
+  # HNSW index parameters (only used with index_type: hnsw).
+  #   hnsw_m: max connections per node (higher = better recall, slower build).
+  #   hnsw_ef_construction: search width during build (higher = better recall, slower build).
+  hnsw_m: 16
+  hnsw_ef_construction: 200
+
+search:
+  top_k: 5
+  rrf_k: 60
+
+llm:
+  api_url: https://openrouter.ai/api/v1/chat/completions
+  model: openai/gpt-4o-mini
+  max_tokens: 1024
+  temperature: 0.0
+
+generate:
+  max_tokens: 2048
+
+batch:
+  max_retries: 3
+  continue_on_error: true
+
+tune:
+  max_trials: 10
+
+  search_space:
+    chunker:
+      max_tokens: [256, 512, 1024]
+      method: [hybrid, fixed]
+
+    search:
+      top_k: [3, 5, 10, 15]
+
+    llm:
+      temperature: {low: 0.0, high: 0.3, step: 0.1}

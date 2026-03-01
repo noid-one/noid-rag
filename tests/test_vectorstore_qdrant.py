@@ -345,7 +345,7 @@ class TestQdrantVectorStoreKeywordSearch:
         assert results[0].chunk_id == "chk_kw"
 
         # Verify the query argument was built via models.Document, not SparseVector
-        mock_models.Document.assert_called_once_with(text="my search terms")
+        mock_models.Document.assert_called_once_with(text="my search terms", model="Qdrant/bm25")
         mock_models.SparseVector.assert_not_called()
 
     @pytest.mark.asyncio

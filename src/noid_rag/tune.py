@@ -8,6 +8,7 @@ import json
 import logging
 import re
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from noid_rag.config import Settings
@@ -123,7 +124,31 @@ async def _cleanup_stores(store_names: list[str], settings: Settings) -> None:
     """
     provider = settings.vectorstore.provider
 
-    if provider == "qdrant":
+    if provider == "zvec":
+        import shutil
+
+        from noid_rag.config import _SAFE_COLLECTION_RE
+
+        data_dir = Path(settings.zvec.data_dir).expanduser()
+        dropped = 0
+        for name in store_names:
+            if not _SAFE_COLLECTION_RE.match(name):
+                logger.warning(
+                    "Skipping unsafe collection name during cleanup: %r", name
+                )
+                continue
+            collection_path = data_dir / name
+            # Guard against path traversal even though names are generated internally
+            if not collection_path.resolve().is_relative_to(data_dir.resolve()):
+                logger.warning(
+                    "Skipping collection path outside data_dir during cleanup: %r", name
+                )
+                continue
+            if collection_path.exists():
+                shutil.rmtree(collection_path)
+                dropped += 1
+        logger.info("Cleaned up %d temporary zvec collections", dropped)
+    elif provider == "qdrant":
         from noid_rag.config import _SAFE_COLLECTION_RE
         from noid_rag.vectorstore_qdrant import make_raw_client
 
@@ -198,7 +223,19 @@ def _setup_trial(
 
     # Set up temp store name
     store_name = f"{base_table}_tune_{cache_key}"
-    if settings.vectorstore.provider == "qdrant":
+    if settings.vectorstore.provider == "zvec":
+        trial_settings = trial_settings.model_copy(
+            update={
+                "vectorstore": trial_settings.vectorstore.model_copy(
+                    update={"embedding_dim": embedding_dim}
+                ),
+                "zvec": trial_settings.zvec.model_copy(
+                    update={"collection_name": store_name}
+                ),
+                "eval": trial_settings.eval.model_copy(update={"save_results": False}),
+            }
+        )
+    elif settings.vectorstore.provider == "qdrant":
         trial_settings = trial_settings.model_copy(
             update={
                 "vectorstore": trial_settings.vectorstore.model_copy(
@@ -293,13 +330,15 @@ def run_tune(
     all_trials: list[dict[str, Any]] = []
 
     provider = settings.vectorstore.provider
-    if provider == "qdrant":
+    if provider == "zvec":
+        base_table = settings.zvec.collection_name
+    elif provider == "qdrant":
         base_table = settings.qdrant.collection_name
     else:
         base_table = settings.vectorstore.table_name
 
     # The temp store suffix is '_tune_' (6 chars) + 8-char hex digest = 14 chars.
-    # Both backends have identifier length limits that must be respected.
+    # All backends have identifier length limits that must be respected.
     tune_suffix_len = 14  # len('_tune_') + len(8-char hex digest)
     if provider == "pgvector":
         max_base_len = 63 - tune_suffix_len  # PostgreSQL's 63-char identifier limit
@@ -319,6 +358,15 @@ def run_tune(
                 f"must be at most {max_base_len} characters to stay within "
                 "Qdrant's 255-character collection name limit."
             )
+    elif provider == "zvec":
+        max_base_len = 255 - tune_suffix_len  # filesystem name limit
+        if len(base_table) > max_base_len:
+            raise ValueError(
+                f"zvec.collection_name {base_table!r} is too long for tuning. "
+                f"Tuning appends a {tune_suffix_len}-char suffix; the base name "
+                f"must be at most {max_base_len} characters to stay within "
+                "the 255-character filesystem name limit."
+            )
 
     # Create a single event loop for all trials — avoids the overhead of
     # creating and destroying a loop per trial (which also prevents connection reuse).
@@ -335,7 +383,9 @@ def run_tune(
         from noid_rag.api import NoidRag
 
         rag = NoidRag(config=trial_settings)
-        if provider == "qdrant":
+        if provider == "zvec":
+            store_name = trial_settings.zvec.collection_name
+        elif provider == "qdrant":
             store_name = trial_settings.qdrant.collection_name
         else:
             store_name = trial_settings.vectorstore.table_name
@@ -379,7 +429,7 @@ def run_tune(
     finally:
         # Clean up temp stores
         should_cleanup = bool(temp_stores) and (
-            provider != "pgvector" or bool(settings.vectorstore.dsn)
+            provider in ("qdrant", "zvec") or bool(settings.vectorstore.dsn)
         )
         if should_cleanup:
             try:

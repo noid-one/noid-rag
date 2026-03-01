@@ -40,6 +40,51 @@ class TestCreateVectorstore:
 
         assert isinstance(store, QdrantVectorStore)
 
+    def test_zvec_returns_zvecvectorstore(self):
+        from noid_rag.vectorstore_factory import create_vectorstore
+
+        settings = Settings()
+        settings = settings.model_copy(
+            update={
+                "vectorstore": settings.vectorstore.model_copy(update={"provider": "zvec"}),
+            }
+        )
+
+        with patch(
+            "noid_rag.vectorstore_zvec._import_zvec",
+            return_value=MagicMock(),
+        ):
+            store = create_vectorstore(settings)
+
+        from noid_rag.vectorstore_zvec import ZvecVectorStore
+
+        assert isinstance(store, ZvecVectorStore)
+
+    def test_zvec_passes_zvec_config_and_embedding_dim(self):
+        from noid_rag.vectorstore_factory import create_vectorstore
+
+        settings = Settings()
+        settings = settings.model_copy(
+            update={
+                "vectorstore": settings.vectorstore.model_copy(
+                    update={"provider": "zvec", "embedding_dim": 384}
+                ),
+                "zvec": settings.zvec.model_copy(
+                    update={"collection_name": "my_docs", "data_dir": "/tmp/zvec"}
+                ),
+            }
+        )
+
+        with patch(
+            "noid_rag.vectorstore_zvec._import_zvec",
+            return_value=MagicMock(),
+        ):
+            store = create_vectorstore(settings)
+
+        assert store.config.collection_name == "my_docs"
+        assert store.config.data_dir == "/tmp/zvec"
+        assert store.embedding_dim == 384
+
     def test_unknown_provider_raises_valueerror(self):
         from noid_rag.vectorstore_factory import create_vectorstore
 

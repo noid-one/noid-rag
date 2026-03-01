@@ -23,4 +23,11 @@ def create_vectorstore(settings: Settings) -> VectorStore:
             config=settings.qdrant,
             embedding_dim=settings.vectorstore.embedding_dim,
         )
+    elif provider == "zvec":
+        from noid_rag.vectorstore_zvec import ZvecVectorStore
+
+        return ZvecVectorStore(
+            config=settings.zvec,
+            embedding_dim=settings.vectorstore.embedding_dim,
+        )
     raise ValueError(f"Unknown vectorstore provider: {provider!r}")

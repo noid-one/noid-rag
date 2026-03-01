@@ -38,9 +38,14 @@ class NoidRag:
     def _get_embed_client(self) -> Any:
         """Return a shared EmbeddingClient, creating lazily."""
         if self._embed_client is None:
-            from noid_rag.embeddings import EmbeddingClient
+            if self.settings.embedding.provider == "zvec":
+                from noid_rag.embeddings_zvec import ZvecEmbeddingClient
 
-            self._embed_client = EmbeddingClient(config=self.settings.embedding)
+                self._embed_client = ZvecEmbeddingClient(config=self.settings.embedding)
+            else:
+                from noid_rag.embeddings import EmbeddingClient
+
+                self._embed_client = EmbeddingClient(config=self.settings.embedding)
         return self._embed_client
 
     def _get_llm_client(self) -> Any:
