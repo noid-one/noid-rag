@@ -9,21 +9,47 @@ from noid_rag.models import Chunk, SearchResult
 
 
 def _make_mock_zvec():
-    """Create a mock zvec module."""
+    """Create a mock zvec module matching the real zvec 0.2.0 API."""
     zvec = MagicMock()
-    zvec.Schema.return_value = MagicMock()
-    zvec.Field.side_effect = lambda name, ftype: MagicMock(name=name, field_type=ftype)
-    zvec.VectorField.side_effect = lambda name, vtype, *args: MagicMock(name=name)
-    zvec.FieldType.STRING = "STRING"
-    zvec.VectorType.FP32 = "FP32"
-    zvec.VectorType.SPARSE_FP32 = "SPARSE_FP32"
-    zvec.VectorQuery.side_effect = lambda name, **kwargs: MagicMock(name=name, **kwargs)
-    zvec.Doc.side_effect = lambda **kwargs: kwargs
-    zvec.BM25EmbeddingFunction.return_value = MagicMock()
-    zvec.RrfReRanker.side_effect = lambda **kwargs: MagicMock(**kwargs)
-    zvec.Collection = MagicMock()
-    zvec.DefaultLocalDenseEmbedding.return_value = MagicMock()
+    # Schema types
+    zvec.CollectionSchema.return_value = MagicMock()
+    zvec.FieldSchema.side_effect = lambda name, dtype, **kw: MagicMock(name=name)
+    zvec.VectorSchema.side_effect = lambda name, dtype, **kw: MagicMock(name=name)
+    zvec.DataType.STRING = "STRING"
+    zvec.DataType.VECTOR_FP32 = "VECTOR_FP32"
+    zvec.DataType.SPARSE_VECTOR_FP32 = "SPARSE_VECTOR_FP32"
+    # Index
+    zvec.HnswIndexParam.return_value = MagicMock(m=16, ef_construction=200)
+    # Query
+    zvec.VectorQuery.side_effect = lambda **kwargs: MagicMock(**kwargs)
+    zvec.RrfReRanker.side_effect = lambda rank_constant=60, topn=10, **kwargs: MagicMock(
+        rank_constant=rank_constant, topn=topn
+    )
+    # Doc: replicate the real Doc(id, fields, vectors, score) shape
+    zvec.Doc.side_effect = lambda **kwargs: MagicMock(**kwargs)
+    # Collection creation
+    zvec.create_and_open.return_value = MagicMock()
+    zvec.open.return_value = MagicMock()
+    # BM25
+    bm25_fn = MagicMock()
+    bm25_fn.embed.return_value = [[0.1, 0.2]]
+    zvec.BM25EmbeddingFunction.return_value = bm25_fn
     return zvec
+
+
+def _make_doc(chunk_id: str, document_id: str, text: str, score: float = 0.0):
+    """Create a mock zvec Doc with .id, .score, .fields matching the real API."""
+    doc = MagicMock()
+    doc.id = chunk_id
+    doc.score = score
+    doc.fields = {
+        "chunk_id": chunk_id,
+        "document_id": document_id,
+        "text": text,
+        "metadata_json": "{}",
+    }
+    doc.vectors = {}
+    return doc
 
 
 @pytest.fixture(autouse=True)
@@ -42,11 +68,15 @@ def mock_collection():
     """A mock zvec collection."""
     collection = MagicMock()
     collection.upsert = MagicMock()
-    collection.search_by_filter = MagicMock(return_value=[])
-    collection.delete_by_filter = MagicMock()
     collection.query = MagicMock(return_value=[])
+    collection.delete_by_filter = MagicMock()
     collection.destroy = MagicMock()
-    collection.close = MagicMock()
+    collection.flush = MagicMock()
+    # stats is a property returning CollectionStats with .doc_count
+    stats_obj = MagicMock()
+    stats_obj.doc_count = 0
+    type(collection).stats = property(lambda self: stats_obj)
+    collection._stats_obj = stats_obj
     return collection
 
 
@@ -114,12 +144,12 @@ class TestZvecVectorStoreUpsert:
 class TestZvecVectorStoreReplaceDocument:
     @pytest.mark.asyncio
     async def test_replace_document_with_existing(self, store, mock_collection):
-        # Simulate 2 existing chunks
+        # Simulate 2 existing docs returned by query(filter=...)
         existing = [
-            {"chunk_id": "old_1", "document_id": "doc_1"},
-            {"chunk_id": "old_2", "document_id": "doc_1"},
+            _make_doc("old_1", "doc_1", "old text 1"),
+            _make_doc("old_2", "doc_1", "old text 2"),
         ]
-        mock_collection.search_by_filter.return_value = existing
+        mock_collection.query.return_value = existing
 
         chunks = [
             Chunk(text="new chunk", document_id="doc_1", embedding=[0.1] * 10),
@@ -131,7 +161,7 @@ class TestZvecVectorStoreReplaceDocument:
 
     @pytest.mark.asyncio
     async def test_replace_document_no_existing(self, store, mock_collection):
-        mock_collection.search_by_filter.return_value = []
+        mock_collection.query.return_value = []
 
         chunks = [
             Chunk(text="first chunk", document_id="doc_new", embedding=[0.1] * 10),
@@ -147,15 +177,7 @@ class TestZvecVectorStoreSearch:
     @pytest.mark.asyncio
     async def test_search_returns_results(self, store, mock_collection):
         mock_collection.query.return_value = [
-            (
-                {
-                    "chunk_id": "chk_abc",
-                    "document_id": "doc_1",
-                    "text": "result text",
-                    "metadata_json": '{"source_type": "pdf"}',
-                },
-                0.95,
-            )
+            _make_doc("chk_abc", "doc_1", "result text", score=0.95),
         ]
 
         results = await store.search([0.1] * 10, top_k=5)
@@ -178,15 +200,7 @@ class TestZvecVectorStoreKeywordSearch:
     @pytest.mark.asyncio
     async def test_keyword_search_returns_results(self, store, mock_collection):
         mock_collection.query.return_value = [
-            (
-                {
-                    "chunk_id": "chk_kw",
-                    "document_id": "doc_1",
-                    "text": "keyword result",
-                    "metadata_json": "{}",
-                },
-                0.8,
-            )
+            _make_doc("chk_kw", "doc_1", "keyword result", score=0.8),
         ]
 
         results = await store.keyword_search("my search terms", top_k=5)
@@ -203,17 +217,9 @@ class TestZvecVectorStoreKeywordSearch:
 
 class TestZvecVectorStoreHybridSearch:
     @pytest.mark.asyncio
-    async def test_hybrid_search_native(self, store, mock_collection, mock_zvec_import):
+    async def test_hybrid_search_native(self, store, mock_collection):
         mock_collection.query.return_value = [
-            (
-                {
-                    "chunk_id": "chk_1",
-                    "document_id": "doc_1",
-                    "text": "hybrid result",
-                    "metadata_json": "{}",
-                },
-                0.9,
-            )
+            _make_doc("chk_1", "doc_1", "hybrid result", score=0.9),
         ]
 
         results = await store.hybrid_search([0.1] * 10, "test query", top_k=5)
@@ -224,19 +230,10 @@ class TestZvecVectorStoreHybridSearch:
     @pytest.mark.asyncio
     async def test_hybrid_search_fallback(self, store, mock_collection, mock_zvec_import):
         """Falls back to Python RRF when native hybrid fails."""
-        # Remove RrfReRanker to trigger fallback
         del mock_zvec_import.RrfReRanker
 
         mock_collection.query.return_value = [
-            (
-                {
-                    "chunk_id": "chk_1",
-                    "document_id": "doc_1",
-                    "text": "text 1",
-                    "metadata_json": "{}",
-                },
-                0.9,
-            )
+            _make_doc("chk_1", "doc_1", "text 1", score=0.9),
         ]
 
         results = await store.hybrid_search([0.1] * 10, "test query", top_k=5)
@@ -246,8 +243,8 @@ class TestZvecVectorStoreHybridSearch:
 class TestZvecVectorStoreDelete:
     @pytest.mark.asyncio
     async def test_delete_by_document_id(self, store, mock_collection):
-        mock_collection.search_by_filter.return_value = [
-            {"chunk_id": f"chk_{i}"} for i in range(3)
+        mock_collection.query.return_value = [
+            _make_doc(f"chk_{i}", "doc_1", f"text {i}") for i in range(3)
         ]
 
         count = await store.delete("doc_1")
@@ -256,7 +253,7 @@ class TestZvecVectorStoreDelete:
 
     @pytest.mark.asyncio
     async def test_delete_no_existing(self, store, mock_collection):
-        mock_collection.search_by_filter.return_value = []
+        mock_collection.query.return_value = []
 
         count = await store.delete("doc_missing")
         assert count == 0
@@ -274,10 +271,11 @@ class TestZvecVectorStoreDrop:
 class TestZvecVectorStoreStats:
     @pytest.mark.asyncio
     async def test_stats_returns_dict(self, store, mock_collection):
-        mock_collection.search_by_filter.return_value = [
-            {"chunk_id": "chk_1", "document_id": "doc_a", "text": "t1", "metadata_json": "{}"},
-            {"chunk_id": "chk_2", "document_id": "doc_a", "text": "t2", "metadata_json": "{}"},
-            {"chunk_id": "chk_3", "document_id": "doc_b", "text": "t3", "metadata_json": "{}"},
+        mock_collection._stats_obj.doc_count = 3
+        mock_collection.query.return_value = [
+            _make_doc("chk_1", "doc_a", "t1"),
+            _make_doc("chk_2", "doc_a", "t2"),
+            _make_doc("chk_3", "doc_b", "t3"),
         ]
 
         stats = await store.stats()
@@ -288,7 +286,7 @@ class TestZvecVectorStoreStats:
 
     @pytest.mark.asyncio
     async def test_stats_empty_collection(self, store, mock_collection):
-        mock_collection.search_by_filter.return_value = []
+        mock_collection._stats_obj.doc_count = 0
 
         stats = await store.stats()
         assert stats["total_chunks"] == 0
@@ -315,9 +313,9 @@ class TestZvecVectorStoreNotConnected:
 
 class TestZvecVectorStoreClose:
     @pytest.mark.asyncio
-    async def test_close_releases_collection(self, store, mock_collection):
+    async def test_close_flushes_and_releases(self, store, mock_collection):
         await store.close()
-        mock_collection.close.assert_called_once()
+        mock_collection.flush.assert_called_once()
         assert store._collection is None
 
     @pytest.mark.asyncio
@@ -332,13 +330,8 @@ class TestZvecVectorStoreClose:
 class TestZvecVectorStoreSampleChunks:
     @pytest.mark.asyncio
     async def test_sample_random(self, store, mock_collection):
-        mock_collection.search_by_filter.return_value = [
-            {
-                "chunk_id": "chk_1",
-                "document_id": "doc_1",
-                "text": "sample text",
-                "metadata_json": "{}",
-            },
+        mock_collection.query.return_value = [
+            _make_doc("chk_1", "doc_1", "sample text"),
         ]
 
         results = await store.sample_chunks(limit=5, strategy="random")
@@ -348,13 +341,8 @@ class TestZvecVectorStoreSampleChunks:
 
     @pytest.mark.asyncio
     async def test_sample_diverse(self, store, mock_collection):
-        mock_collection.search_by_filter.return_value = [
-            {
-                "chunk_id": f"chk_{i}",
-                "document_id": f"doc_{i % 2}",
-                "text": f"text {i}",
-                "metadata_json": "{}",
-            }
+        mock_collection.query.return_value = [
+            _make_doc(f"chk_{i}", f"doc_{i % 2}", f"text {i}")
             for i in range(4)
         ]
 
@@ -371,12 +359,20 @@ class TestZvecRrfMerge:
         from noid_rag.vectorstore_zvec import ZvecVectorStore
 
         dense = [
-            SearchResult(chunk_id="a", text="a", score=1.0, metadata={}, document_id="d1"),
-            SearchResult(chunk_id="b", text="b", score=0.9, metadata={}, document_id="d1"),
+            SearchResult(
+                chunk_id="a", text="a", score=1.0, metadata={}, document_id="d1"
+            ),
+            SearchResult(
+                chunk_id="b", text="b", score=0.9, metadata={}, document_id="d1"
+            ),
         ]
         sparse = [
-            SearchResult(chunk_id="b", text="b", score=1.0, metadata={}, document_id="d1"),
-            SearchResult(chunk_id="c", text="c", score=0.9, metadata={}, document_id="d2"),
+            SearchResult(
+                chunk_id="b", text="b", score=1.0, metadata={}, document_id="d1"
+            ),
+            SearchResult(
+                chunk_id="c", text="c", score=0.9, metadata={}, document_id="d2"
+            ),
         ]
 
         merged = ZvecVectorStore._rrf_merge(dense, sparse, top_k=3, rrf_k=60)
@@ -389,7 +385,11 @@ class TestZvecRrfMerge:
 
         dense = [
             SearchResult(
-                chunk_id=f"chk_{i}", text=f"t{i}", score=1.0, metadata={}, document_id="d1"
+                chunk_id=f"chk_{i}",
+                text=f"t{i}",
+                score=1.0,
+                metadata={},
+                document_id="d1",
             )
             for i in range(5)
         ]

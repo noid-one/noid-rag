@@ -325,6 +325,57 @@ async def test_cleanup_stores_qdrant_skips_unsafe_names():
 
 
 @pytest.mark.asyncio
+async def test_cleanup_stores_zvec(tmp_path):
+    """zvec cleanup removes existing collection directories and skips missing ones."""
+    from noid_rag.tune import _cleanup_stores
+
+    # Create one real directory and leave the other absent
+    (tmp_path / "docs_tune_abc12345").mkdir()
+
+    settings = Settings()
+    settings = settings.model_copy(
+        update={
+            "vectorstore": settings.vectorstore.model_copy(update={"provider": "zvec"}),
+            "zvec": settings.zvec.model_copy(update={"data_dir": str(tmp_path)}),
+        }
+    )
+
+    await _cleanup_stores(
+        ["docs_tune_abc12345", "docs_tune_def67890"],
+        settings,
+    )
+
+    assert not (tmp_path / "docs_tune_abc12345").exists()
+    # Second name never existed — should not raise
+    assert not (tmp_path / "docs_tune_def67890").exists()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_stores_zvec_skips_unsafe_names(tmp_path):
+    """Unsafe collection names must be skipped during zvec cleanup."""
+    from noid_rag.tune import _cleanup_stores
+
+    safe_dir = tmp_path / "docs_tune_abc12345"
+    safe_dir.mkdir()
+
+    settings = Settings()
+    settings = settings.model_copy(
+        update={
+            "vectorstore": settings.vectorstore.model_copy(update={"provider": "zvec"}),
+            "zvec": settings.zvec.model_copy(update={"data_dir": str(tmp_path)}),
+        }
+    )
+
+    await _cleanup_stores(
+        ["docs_tune_abc12345", "bad; DROP evil; --", "docs_tune_def67890"],
+        settings,
+    )
+
+    # Safe dir should be removed; unsafe name should be silently skipped
+    assert not safe_dir.exists()
+
+
+@pytest.mark.asyncio
 async def test_cleanup_stores_qdrant_make_raw_client_raises():
     """When make_raw_client raises, the original error must propagate (not UnboundLocalError)."""
     from noid_rag.tune import _cleanup_stores

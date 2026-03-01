@@ -21,7 +21,7 @@ _SAFE_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 def _import_qdrant() -> tuple[Any, Any]:
     """Lazy import of qdrant_client with clear error message."""
     try:
-        from qdrant_client import AsyncQdrantClient, models
+        from qdrant_client import AsyncQdrantClient, models  # type: ignore[import-untyped]
 
         return AsyncQdrantClient, models
     except ImportError:

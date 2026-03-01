@@ -19,6 +19,9 @@ from noid_rag.models import Chunk, SearchResult
 
 logger = logging.getLogger(__name__)
 
+# zvec enforces a maximum topk of 1024 per query call.
+_ZVEC_MAX_TOPK = 1024
+
 
 def _import_zvec() -> Any:
     """Lazy import of zvec with clear error message."""
@@ -56,51 +59,75 @@ class ZvecVectorStore:
         data_dir.mkdir(parents=True, exist_ok=True)
         collection_path = data_dir / self.config.collection_name
 
-        schema = zvec.Schema(
+        # Try to init BM25 before schema creation so we know whether to
+        # include the sparse vector field (zvec fields are not nullable).
+        try:
+            self._bm25_fn = zvec.BM25EmbeddingFunction()
+        except Exception as exc:
+            logger.warning("BM25 not available (%s); keyword/hybrid search will be limited", exc)
+            self._bm25_fn = None
+
+        # Build HNSW index params if configured.
+        # COSINE metric is correct for embedding similarity; IP (inner product) is only
+        # equivalent to cosine when vectors are L2-normalised, which is not guaranteed here.
+        index_param = None
+        if self.config.index_type == "hnsw":
+            index_param = zvec.HnswIndexParam(
+                m=self.config.hnsw_m,
+                ef_construction=self.config.hnsw_ef_construction,
+                metric_type=zvec.MetricType.COSINE,
+            )
+
+        vector_fields = [
+            zvec.VectorSchema(
+                "embedding",
+                zvec.DataType.VECTOR_FP32,
+                dimension=self.embedding_dim,
+                index_param=index_param,
+            ),
+        ]
+        if self._bm25_fn is not None:
+            vector_fields.append(
+                zvec.VectorSchema("bm25_sparse", zvec.DataType.SPARSE_VECTOR_FP32)
+            )
+
+        schema = zvec.CollectionSchema(
+            name=self.config.collection_name,
             fields=[
-                zvec.Field("document_id", zvec.FieldType.STRING),
-                zvec.Field("chunk_id", zvec.FieldType.STRING),
-                zvec.Field("text", zvec.FieldType.STRING),
-                zvec.Field("metadata_json", zvec.FieldType.STRING),
+                zvec.FieldSchema("document_id", zvec.DataType.STRING),
+                zvec.FieldSchema("chunk_id", zvec.DataType.STRING),
+                zvec.FieldSchema("text", zvec.DataType.STRING),
+                zvec.FieldSchema("metadata_json", zvec.DataType.STRING),
             ],
-            vectors=[
-                zvec.VectorField("embedding", zvec.VectorType.FP32, self.embedding_dim),
-                zvec.VectorField("bm25_sparse", zvec.VectorType.SPARSE_FP32),
-            ],
+            vectors=vector_fields,
         )
 
-        index_params = {}
-        if self.config.index_type == "hnsw":
-            index_params = {
-                "index_type": "hnsw",
-                "hnsw_m": self.config.hnsw_m,
-                "hnsw_ef_construction": self.config.hnsw_ef_construction,
-            }
+        str_path = str(collection_path)
 
         def _open() -> Any:
             if collection_path.exists():
-                return zvec.Collection.open(str(collection_path))
-            return zvec.Collection.create(str(collection_path), schema=schema, **index_params)
+                return zvec.open(str_path)
+            return zvec.create_and_open(str_path, schema)
 
         self._collection = await asyncio.to_thread(_open)
-
-        try:
-            self._bm25_fn = zvec.BM25EmbeddingFunction()
-        except AttributeError:
-            logger.warning("zvec.BM25EmbeddingFunction not available; BM25 search will be limited")
-            self._bm25_fn = None
 
     def _get_collection(self) -> Any:
         if self._collection is None:
             raise RuntimeError("ZvecVectorStore not connected. Call connect() first.")
         return self._collection
 
+    def _get_zvec(self) -> Any:
+        """Return the imported zvec module, raising if not connected."""
+        if self._zvec is None:
+            raise RuntimeError("ZvecVectorStore not connected. Call connect() first.")
+        return self._zvec
+
     async def upsert(self, chunks: list[Chunk]) -> int:
         """Upsert chunks into the collection. Returns count of upserted docs."""
         if not chunks:
             return 0
 
-        zvec = self._zvec
+        zvec = self._get_zvec()
         collection = self._get_collection()
 
         docs = []
@@ -108,22 +135,24 @@ class ZvecVectorStore:
             if chunk.embedding is None:
                 raise ValueError(f"Chunk {chunk.id} has no embedding")
 
-            doc = {
-                "chunk_id": chunk.id,
-                "document_id": chunk.document_id,
-                "text": chunk.text,
-                "metadata_json": json.dumps(chunk.metadata),
-                "embedding": chunk.embedding,
-            }
-
-            # Add BM25 sparse vector if available
+            vectors: dict[str, Any] = {"embedding": chunk.embedding}
             if self._bm25_fn is not None:
                 try:
-                    doc["bm25_sparse"] = self._bm25_fn.encode(chunk.text)
+                    vectors["bm25_sparse"] = self._bm25_fn.embed(chunk.text)
                 except Exception:
                     logger.debug("Failed to encode BM25 sparse vector for chunk %s", chunk.id)
 
-            docs.append(zvec.Doc(**doc) if hasattr(zvec, "Doc") else doc)
+            doc = zvec.Doc(
+                id=chunk.id,
+                fields={
+                    "chunk_id": chunk.id,
+                    "document_id": chunk.document_id,
+                    "text": chunk.text,
+                    "metadata_json": json.dumps(chunk.metadata),
+                },
+                vectors=vectors,
+            )
+            docs.append(doc)
 
         await asyncio.to_thread(collection.upsert, docs)
         return len(docs)
@@ -135,9 +164,7 @@ class ZvecVectorStore:
 
         Because zvec's delete_by_filter targets all records matching the filter
         (including any newly upserted chunks with the same document_id), the
-        only safe ordering is: count + delete first, then insert.  This means
-        there is a brief window where the document has no chunks in the store,
-        but it avoids silently losing newly ingested data.
+        only safe ordering is: count + delete first, then insert.
 
         Returns (deleted, inserted).
         """
@@ -145,9 +172,9 @@ class ZvecVectorStore:
 
         # Count existing chunks before any mutation
         old_results = await asyncio.to_thread(
-            collection.search_by_filter,
-            f"document_id='{document_id}'",
-            limit=100_000,
+            collection.query,
+            filter=f"document_id='{document_id}'",
+            topk=_ZVEC_MAX_TOPK,
         )
         deleted = len(old_results) if old_results else 0
 
@@ -170,13 +197,13 @@ class ZvecVectorStore:
     ) -> list[SearchResult]:
         """Dense vector search."""
         collection = self._get_collection()
-        zvec = self._zvec
+        zvec = self._get_zvec()
 
         fetch_k = top_k * 3 if filter_metadata else top_k
 
         results = await asyncio.to_thread(
             collection.query,
-            zvec.VectorQuery("embedding", vector=embedding),
+            zvec.VectorQuery(field_name="embedding", vector=embedding),
             topk=fetch_k,
         )
 
@@ -193,15 +220,15 @@ class ZvecVectorStore:
             return []
 
         collection = self._get_collection()
-        zvec = self._zvec
+        zvec = self._get_zvec()
 
         fetch_k = top_k * 3 if filter_metadata else top_k
 
         try:
-            sparse_query = self._bm25_fn.encode(query)
+            sparse_vector = self._bm25_fn.embed(query)
             results = await asyncio.to_thread(
                 collection.query,
-                zvec.VectorQuery("bm25_sparse", vector=sparse_query),
+                zvec.VectorQuery(field_name="bm25_sparse", vector=sparse_vector),
                 topk=fetch_k,
             )
         except Exception:
@@ -223,7 +250,7 @@ class ZvecVectorStore:
         Tries zvec's native multi-vector query with RrfReRanker first;
         falls back to Python-side RRF fusion if unavailable.
         """
-        zvec = self._zvec
+        zvec = self._get_zvec()
         collection = self._get_collection()
 
         fetch_k = top_k * 3 if filter_metadata else top_k
@@ -231,19 +258,23 @@ class ZvecVectorStore:
         # Try native multi-vector RRF
         if self._bm25_fn is not None and hasattr(zvec, "RrfReRanker"):
             try:
-                sparse_query = self._bm25_fn.encode(query)
+                sparse_vector = self._bm25_fn.embed(query)
                 results = await asyncio.to_thread(
                     collection.query,
                     [
-                        zvec.VectorQuery("embedding", vector=embedding),
-                        zvec.VectorQuery("bm25_sparse", vector=sparse_query),
+                        zvec.VectorQuery(field_name="embedding", vector=embedding),
+                        zvec.VectorQuery(
+                            field_name="bm25_sparse", vector=sparse_vector
+                        ),
                     ],
                     topk=fetch_k,
-                    reranker=zvec.RrfReRanker(k=rrf_k),
+                    reranker=zvec.RrfReRanker(rank_constant=rrf_k, topn=fetch_k),
                 )
                 return self._results_to_search_results(results, top_k, filter_metadata)
             except Exception:
-                logger.debug("Native zvec hybrid search failed, falling back to Python RRF")
+                logger.debug(
+                    "Native zvec hybrid search failed, falling back to Python RRF"
+                )
 
         # Fallback: run dense + sparse in parallel, merge with Python RRF
         dense_task = self.search(embedding, top_k=fetch_k, filter_metadata=filter_metadata)
@@ -262,14 +293,14 @@ class ZvecVectorStore:
 
         if strategy == "random":
             results = await asyncio.to_thread(
-                collection.search_by_filter, "", limit=limit
+                collection.query, topk=limit
             )
             return [self._doc_to_dict(doc) for doc in (results or [])][:limit]
         else:
             # Diverse: over-fetch, round-robin by document_id
             over_fetch = limit * 5
             results = await asyncio.to_thread(
-                collection.search_by_filter, "", limit=over_fetch
+                collection.query, topk=over_fetch
             )
 
             by_doc: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -297,9 +328,9 @@ class ZvecVectorStore:
         collection = self._get_collection()
 
         results = await asyncio.to_thread(
-            collection.search_by_filter,
-            f"document_id='{document_id}'",
-            limit=100_000,
+            collection.query,
+            filter=f"document_id='{document_id}'",
+            topk=_ZVEC_MAX_TOPK,
         )
         count = len(results) if results else 0
 
@@ -327,17 +358,31 @@ class ZvecVectorStore:
         """Get collection statistics."""
         collection = self._get_collection()
 
-        results = await asyncio.to_thread(
-            collection.search_by_filter, "", limit=100_000
-        )
-        all_docs = results or []
-        total_chunks = len(all_docs)
+        # Use native stats for chunk count
+        col_stats = await asyncio.to_thread(lambda: collection.stats)
+        total_chunks = col_stats.doc_count
 
+        # Count distinct document_ids by querying all docs.
+        # NOTE: zvec enforces a hard cap of _ZVEC_MAX_TOPK (1024) results per query.
+        # For collections with more than 1024 chunks the document count below will be
+        # a lower-bound, not an exact figure.  The chunk count from native stats is
+        # always accurate.
         doc_ids: set[str] = set()
-        for doc in all_docs:
-            doc_id = self._get_field(doc, "document_id")
-            if doc_id:
-                doc_ids.add(doc_id)
+        if total_chunks > 0:
+            if total_chunks > _ZVEC_MAX_TOPK:
+                logger.debug(
+                    "stats(): collection has %d chunks but zvec query cap is %d; "
+                    "total_documents may be undercounted",
+                    total_chunks,
+                    _ZVEC_MAX_TOPK,
+                )
+            results = await asyncio.to_thread(
+                collection.query, topk=min(total_chunks, _ZVEC_MAX_TOPK)
+            )
+            for doc in results or []:
+                doc_id = doc.fields.get("document_id", "") if doc.fields else ""
+                if doc_id:
+                    doc_ids.add(doc_id)
 
         return {
             "total_chunks": total_chunks,
@@ -347,10 +392,14 @@ class ZvecVectorStore:
         }
 
     async def close(self) -> None:
-        """Release the collection handle."""
+        """Release the collection handle.
+
+        zvec collections have no explicit close method; flush pending writes
+        and release the reference so the GC can reclaim resources.
+        """
         if self._collection is not None:
             try:
-                await asyncio.to_thread(self._collection.close)
+                await asyncio.to_thread(self._collection.flush)
             except Exception:
                 pass
             self._collection = None
@@ -365,34 +414,29 @@ class ZvecVectorStore:
     # --- Helpers ---
 
     @staticmethod
-    def _get_field(doc: Any, field: str) -> str:
-        """Extract a field from a zvec result doc (dict or object)."""
-        if isinstance(doc, dict):
-            return doc.get(field, "")
-        return getattr(doc, field, "")
-
-    def _doc_to_dict(self, doc: Any) -> dict[str, Any]:
-        """Convert a zvec result doc to a standard dict."""
-        metadata_str = self._get_field(doc, "metadata_json")
+    def _doc_to_dict(doc: Any) -> dict[str, Any]:
+        """Convert a zvec Doc to a standard dict."""
+        fields = doc.fields or {}
+        metadata_str = fields.get("metadata_json", "")
         try:
             metadata = json.loads(metadata_str) if metadata_str else {}
         except (json.JSONDecodeError, TypeError):
             metadata = {}
 
         return {
-            "id": self._get_field(doc, "chunk_id"),
-            "document_id": self._get_field(doc, "document_id"),
-            "text": self._get_field(doc, "text"),
+            "id": fields.get("chunk_id", doc.id),
+            "document_id": fields.get("document_id", ""),
+            "text": fields.get("text", ""),
             "metadata": metadata,
         }
 
-    def _doc_to_search_result(self, doc: Any, score: float = 0.0) -> SearchResult:
-        """Convert a zvec result doc to a SearchResult."""
+    def _doc_to_search_result(self, doc: Any) -> SearchResult:
+        """Convert a zvec Doc to a SearchResult."""
         d = self._doc_to_dict(doc)
         return SearchResult(
             chunk_id=d["id"],
             text=d["text"],
-            score=score,
+            score=doc.score if doc.score is not None else 0.0,
             metadata=d["metadata"],
             document_id=d["document_id"],
         )
@@ -408,15 +452,8 @@ class ZvecVectorStore:
             return []
 
         search_results = []
-        for item in results:
-            # zvec results may be (doc, score) tuples or scored objects
-            if isinstance(item, tuple) and len(item) == 2:
-                doc, score = item
-            else:
-                doc = item
-                score = getattr(item, "score", 0.0)
-
-            sr = self._doc_to_search_result(doc, score)
+        for doc in results:
+            sr = self._doc_to_search_result(doc)
 
             # Post-filter by metadata if needed
             if filter_metadata:

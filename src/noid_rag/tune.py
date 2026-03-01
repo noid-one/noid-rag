@@ -212,8 +212,13 @@ def _setup_trial(
     embedding_model = trial_params.get("embedding", {}).get("model", settings.embedding.model)
     cache_key = _ingest_config_hash(chunker_params, embedding_model, parser_params)
 
-    # Resolve embedding dimension and check HNSW compatibility (pgvector only)
-    embedding_dim = EMBEDDING_DIM_MAP.get(embedding_model, settings.vectorstore.embedding_dim)
+    # Resolve embedding dimension.  For local providers (zvec) the dimension is
+    # fixed by the model and already set in vectorstore.embedding_dim; the
+    # EMBEDDING_DIM_MAP only applies to API-based embedding models.
+    if settings.embedding.provider == "zvec":
+        embedding_dim = settings.vectorstore.embedding_dim
+    else:
+        embedding_dim = EMBEDDING_DIM_MAP.get(embedding_model, settings.vectorstore.embedding_dim)
     if settings.vectorstore.provider == "pgvector" and embedding_dim > _HNSW_MAX_DIM:
         raise optuna.TrialPruned(
             f"Embedding model {embedding_model!r} produces {embedding_dim} dimensions, "
@@ -273,10 +278,11 @@ async def _ensure_ingested(
 ) -> None:
     """Ingest sources if this config hasn't been ingested yet."""
     if cache_key not in ingest_cache:
+        # Track for cleanup BEFORE ingest so failed attempts are still removed.
+        temp_tables.append(table_name)
         for source in sources:
             await rag.aingest(source)
         ingest_cache[cache_key] = table_name
-        temp_tables.append(table_name)
 
 
 async def _evaluate_trial(
@@ -367,6 +373,19 @@ def run_tune(
                 f"must be at most {max_base_len} characters to stay within "
                 "the 255-character filesystem name limit."
             )
+
+    # Clean up stale tune collections from previous runs that may have
+    # crashed or failed before their cleanup code could run.
+    if provider == "zvec":
+        import shutil
+
+        data_dir = Path(settings.zvec.data_dir).expanduser()
+        if data_dir.exists():
+            prefix = f"{base_table}_tune_"
+            for entry in data_dir.iterdir():
+                if entry.is_dir() and entry.name.startswith(prefix):
+                    shutil.rmtree(entry)
+                    logger.debug("Removed stale tune collection: %s", entry.name)
 
     # Create a single event loop for all trials — avoids the overhead of
     # creating and destroying a loop per trial (which also prevents connection reuse).

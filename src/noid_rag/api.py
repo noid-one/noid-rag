@@ -34,9 +34,14 @@ class NoidRag:
 
         self._embed_client: Any | None = None
         self._llm_client: Any | None = None
+        self._store: Any | None = None
 
-    def _get_embed_client(self) -> Any:
-        """Return a shared EmbeddingClient, creating lazily."""
+    def get_embed_client(self) -> Any:
+        """Return a shared embedding client for the configured provider, creating it lazily.
+
+        Dispatches to ``ZvecEmbeddingClient`` when ``embedding.provider == "zvec"`` and
+        to the API-backed ``EmbeddingClient`` for all other providers.
+        """
         if self._embed_client is None:
             if self.settings.embedding.provider == "zvec":
                 from noid_rag.embeddings_zvec import ZvecEmbeddingClient
@@ -48,6 +53,9 @@ class NoidRag:
                 self._embed_client = EmbeddingClient(config=self.settings.embedding)
         return self._embed_client
 
+    # Keep the private alias for backwards compatibility with any internal callers.
+    _get_embed_client = get_embed_client
+
     def _get_llm_client(self) -> Any:
         """Return a shared LLMClient, creating lazily."""
         if self._llm_client is None:
@@ -56,8 +64,26 @@ class NoidRag:
             self._llm_client = LLMClient(config=self.settings.llm)
         return self._llm_client
 
+    async def _get_store(self) -> Any:
+        """Return a shared vector store, connecting lazily.
+
+        File-based backends like zvec must keep the collection open for the
+        lifetime of the NoidRag instance to avoid WAL corruption from rapid
+        open/close cycles.  Client-server backends (pgvector, Qdrant) also
+        benefit from connection reuse.
+        """
+        if self._store is None:
+            from noid_rag.vectorstore_factory import create_vectorstore
+
+            self._store = create_vectorstore(self.settings)
+            await self._store.connect()
+        return self._store
+
     async def close(self) -> None:
-        """Close shared HTTP clients."""
+        """Close shared HTTP clients and vector store."""
+        if self._store is not None:
+            await self._store.close()
+            self._store = None
         if self._embed_client is not None:
             await self._embed_client.close()
             self._embed_client = None
@@ -165,15 +191,14 @@ class NoidRag:
 
     async def areset(self) -> None:
         """Async: drop the vector store."""
-        from noid_rag.vectorstore_factory import create_vectorstore
-
-        async with create_vectorstore(self.settings) as store:
-            await store.drop()
+        store = await self._get_store()
+        await store.drop()
+        await store.close()
+        self._store = None
 
     async def aingest(self, source: str | Path) -> dict[str, Any]:
         """Async: parse, chunk, embed, and store."""
         from noid_rag.chunker import chunk as do_chunk
-        from noid_rag.vectorstore_factory import create_vectorstore
 
         doc = self.parse(source)
         chunks = do_chunk(doc, config=self.settings.chunker)
@@ -181,28 +206,26 @@ class NoidRag:
         embed_client = self._get_embed_client()
         await embed_client.embed_chunks(chunks)
 
-        async with create_vectorstore(self.settings) as store:
-            deleted, count = await store.replace_document(doc.id, chunks)
+        store = await self._get_store()
+        deleted, count = await store.replace_document(doc.id, chunks)
 
         return {"chunks_stored": count, "chunks_deleted": deleted, "document_id": doc.id}
 
     async def asearch(self, query: str, top_k: int | None = None) -> list[SearchResult]:
         """Async: hybrid search (vector + keyword with RRF)."""
-        from noid_rag.vectorstore_factory import create_vectorstore
-
         top_k = self.settings.search.top_k if top_k is None else top_k
         rrf_k = self.settings.search.rrf_k
 
         embed_client = self._get_embed_client()
         query_embedding = await embed_client.embed_query(query)
 
-        async with create_vectorstore(self.settings) as store:
-            return await store.hybrid_search(
-                query_embedding,
-                query,
-                top_k=top_k,
-                rrf_k=rrf_k,
-            )
+        store = await self._get_store()
+        return await store.hybrid_search(
+            query_embedding,
+            query,
+            top_k=top_k,
+            rrf_k=rrf_k,
+        )
 
     async def aanswer(self, query: str, top_k: int | None = None) -> AnswerResult:
         """Async: search and synthesize an answer via LLM."""
@@ -259,31 +282,25 @@ class NoidRag:
         )
 
     async def abatch(self, directory: str | Path, pattern: str = "*") -> dict[str, Any]:
-        """Async: batch process a directory.
-
-        Reuses a single store connection for the entire batch to avoid
-        per-file connection overhead (collection-existence checks, etc.).
-        """
+        """Async: batch process a directory."""
         from dataclasses import asdict
 
         from noid_rag.batch import BatchProcessor
         from noid_rag.chunker import chunk as do_chunk
-        from noid_rag.vectorstore_factory import create_vectorstore
 
         directory = Path(directory)
         files = sorted(f for f in directory.glob(pattern) if f.is_file())
 
         processor = BatchProcessor(config=self.settings.batch)
+        store = await self._get_store()
+        embed_client = self._get_embed_client()
 
-        async with create_vectorstore(self.settings) as store:
-            embed_client = self._get_embed_client()
+        async def process_one(file_path: Path) -> dict[str, Any]:
+            doc = self.parse(file_path)
+            chunks = do_chunk(doc, config=self.settings.chunker)
+            await embed_client.embed_chunks(chunks)
+            deleted, count = await store.replace_document(doc.id, chunks)
+            return {"chunks_stored": count, "chunks_deleted": deleted, "document_id": doc.id}
 
-            async def process_one(file_path: Path) -> dict[str, Any]:
-                doc = self.parse(file_path)
-                chunks = do_chunk(doc, config=self.settings.chunker)
-                await embed_client.embed_chunks(chunks)
-                deleted, count = await store.replace_document(doc.id, chunks)
-                return {"chunks_stored": count, "chunks_deleted": deleted, "document_id": doc.id}
-
-            result = await processor.process(files, process_one)
+        result = await processor.process(files, process_one)
         return asdict(result)

@@ -14,26 +14,28 @@ def ingest(
     source: Path = typer.Argument(..., help="Path to document file"),
 ):
     """Parse, chunk, embed, and store a document."""
-    from noid_rag.chunker import chunk as do_chunk
-    from noid_rag.embeddings import EmbeddingClient
-    from noid_rag.parser import parse as do_parse
-    from noid_rag.vectorstore_factory import create_vectorstore
+    from noid_rag.api import NoidRag
+
+    rag = NoidRag(config=state.settings)
 
     async def _ingest():
+        from noid_rag.chunker import chunk as do_chunk
+
         with console.status(f"Parsing {source.name}..."):
-            doc = do_parse(source, config=state.settings.parser)
+            doc = rag.parse(source)
 
         with console.status("Chunking..."):
             chunks = do_chunk(doc, config=state.settings.chunker)
 
-        async with EmbeddingClient(config=state.settings.embedding) as embed_client:
-            with console.status(f"Embedding {len(chunks)} chunks..."):
-                await embed_client.embed_chunks(chunks)
+        embed_client = rag.get_embed_client()
+        with console.status(f"Embedding {len(chunks)} chunks..."):
+            await embed_client.embed_chunks(chunks)
 
-        async with create_vectorstore(state.settings) as store:
-            with console.status("Storing..."):
-                deleted, count = await store.replace_document(doc.id, chunks)
+        store = await rag._get_store()
+        with console.status("Storing..."):
+            deleted, count = await store.replace_document(doc.id, chunks)
 
+        await rag.close()
         return doc.id, count, deleted
 
     try:

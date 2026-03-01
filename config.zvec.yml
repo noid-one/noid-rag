@@ -3,8 +3,8 @@
 # Copy to ~/.noid-rag/config.yml and edit to your needs
 #
 # Requires: pip install 'noid-rag[zvec]'
+# This installs zvec, sentence-transformers, and dashtext.
 # No server needed — zvec stores data on the local filesystem.
-# Python 3.11-3.12 only (zvec SDK limitation).
 # ──────────────────────────────────────────────────────
 
 parser:
@@ -19,16 +19,16 @@ chunker:
   overlap: 50
 
 embedding:
-  # Use zvec's built-in local embeddings (all-MiniLM-L6-v2, 384 dims).
-  # No API key needed — the model auto-downloads on first use (~80MB).
-  provider: zvec
-
-  # These fields are ignored when provider is "zvec" but kept for reference
-  # in case you switch to API-based embeddings later.
-  # api_url: https://openrouter.ai/api/v1/embeddings
-  # model: openai/text-embedding-3-small
-
+  # API-based embeddings (same quality as pgvector/Qdrant pipelines).
+  # Requires NOID_RAG_EMBEDDING__API_KEY env var.
+  provider: openrouter
+  api_url: https://openrouter.ai/api/v1/embeddings
+  model: openai/text-embedding-3-small
   batch_size: 64
+
+  # Alternative: local embeddings (no API key needed, but lower quality).
+  # Uncomment below and set embedding_dim to 384:
+  # provider: zvec
 
 vectorstore:
   # Backend provider. This file is configured for zvec.
@@ -36,10 +36,10 @@ vectorstore:
 
   # The number of dimensions in each embedding vector.
   # MUST match the output of your chosen embedding model:
-  #   zvec local (all-MiniLM-L6-v2) -> 384
-  #   text-embedding-3-small         -> 1536
-  #   text-embedding-3-large         -> 3072
-  embedding_dim: 384
+  #   text-embedding-3-small (openrouter) -> 1536
+  #   text-embedding-3-large              -> 3072
+  #   zvec local (all-MiniLM-L6-v2)       -> 384
+  embedding_dim: 1536
 
 zvec:
   # Directory where zvec stores collection data on disk.
