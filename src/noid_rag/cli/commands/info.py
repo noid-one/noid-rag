@@ -11,11 +11,11 @@ from noid_rag.cli.display import print_error, print_stats
 @app.command()
 def info():
     """Show vector store statistics."""
-    from noid_rag.vectorstore_factory import create_vectorstore
+    from noid_rag.api import NoidRag
 
     async def _info():
-        async with create_vectorstore(state.settings) as store:
-            return await store.stats()
+        async with NoidRag(config=state.settings) as rag:
+            return await rag.astats()
 
     try:
         stats = asyncio.run(_info())

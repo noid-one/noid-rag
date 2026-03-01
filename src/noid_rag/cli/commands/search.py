@@ -1,5 +1,6 @@
 """Search command — hybrid search with optional LLM answer."""
 
+import asyncio
 from pathlib import Path
 
 import typer
@@ -23,30 +24,32 @@ def search(
     """Search for similar documents."""
     from noid_rag.api import NoidRag
 
+    async def _search():
+        async with NoidRag(config=state.settings) as rag:
+            if answer and state.settings.llm.api_key.get_secret_value():
+                result = await rag.aanswer(query, top_k=top_k)
+                print_answer_result(result)
+
+                if output:
+                    from noid_rag.export import export
+
+                    export(result.sources, Path(output))
+            else:
+                if answer:
+                    print_warning(
+                        "LLM API key not set — falling back to search results. "
+                        "Set NOID_RAG_LLM__API_KEY to enable answer synthesis."
+                    )
+                results = await rag.asearch(query, top_k=top_k)
+                print_search_results(results)
+
+                if output:
+                    from noid_rag.export import export
+
+                    export(results, Path(output))
+
     try:
-        rag = NoidRag(config=state.settings)
-
-        if answer and state.settings.llm.api_key.get_secret_value():
-            result = rag.answer(query, top_k=top_k)
-            print_answer_result(result)
-
-            if output:
-                from noid_rag.export import export
-
-                export(result.sources, Path(output))
-        else:
-            if answer:
-                print_warning(
-                    "LLM API key not set — falling back to search results. "
-                    "Set NOID_RAG_LLM__API_KEY to enable answer synthesis."
-                )
-            results = rag.search(query, top_k=top_k)
-            print_search_results(results)
-
-            if output:
-                from noid_rag.export import export
-
-                export(results, Path(output))
+        asyncio.run(_search())
     except Exception as e:
         print_error(f"Search failed: {e}")
         raise typer.Exit(1)

@@ -30,11 +30,18 @@ def _make_mock_zvec():
     # Collection creation
     zvec.create_and_open.return_value = MagicMock()
     zvec.open.return_value = MagicMock()
-    # BM25
+    # BM25 (with encoding_type parameter)
     bm25_fn = MagicMock()
     bm25_fn.embed.return_value = [[0.1, 0.2]]
     zvec.BM25EmbeddingFunction.return_value = bm25_fn
     return zvec
+
+
+def _make_mock_splade():
+    """Create a mock _SpladeEncoder that returns sparse dicts."""
+    splade_fn = MagicMock()
+    splade_fn.embed.return_value = {10: 0.5, 42: 1.2}
+    return splade_fn
 
 
 def _make_doc(chunk_id: str, document_id: str, text: str, score: float = 0.0):
@@ -68,6 +75,7 @@ def mock_collection():
     """A mock zvec collection."""
     collection = MagicMock()
     collection.upsert = MagicMock()
+    collection.optimize = MagicMock()
     collection.query = MagicMock(return_value=[])
     collection.delete_by_filter = MagicMock()
     collection.destroy = MagicMock()
@@ -92,7 +100,14 @@ def store(config, mock_collection, mock_zvec_import):
     s = ZvecVectorStore(config=config, embedding_dim=10)
     s._collection = mock_collection
     s._zvec = mock_zvec_import
-    s._bm25_fn = mock_zvec_import.BM25EmbeddingFunction()
+    # Separate doc/query instances for BM25
+    bm25_fn = mock_zvec_import.BM25EmbeddingFunction()
+    s._bm25_doc_fn = bm25_fn
+    s._bm25_query_fn = bm25_fn
+    # SPLADE mock
+    splade_fn = _make_mock_splade()
+    s._splade_doc_fn = splade_fn
+    s._splade_query_fn = splade_fn
     return s
 
 
@@ -116,6 +131,31 @@ class TestZvecVectorStoreInit:
         assert s.embedding_dim == 384
 
 
+class TestZvecVectorStoreConnect:
+    @pytest.mark.asyncio
+    async def test_connect_loads_splade_encoder(self, config, mock_zvec_import):
+        from noid_rag.vectorstore_zvec import ZvecVectorStore, _SpladeEncoder
+
+        mock_encoder = MagicMock()
+        with patch.object(_SpladeEncoder, "_get_encoder", return_value=mock_encoder):
+            store = ZvecVectorStore(config=config, embedding_dim=10)
+            await store.connect()
+            assert store._splade_doc_fn is not None
+            assert store._splade_query_fn is not None
+
+    @pytest.mark.asyncio
+    async def test_connect_splade_unavailable_falls_back(self, config, mock_zvec_import):
+        from noid_rag.vectorstore_zvec import ZvecVectorStore, _SpladeEncoder
+
+        with patch.object(
+            _SpladeEncoder, "_get_encoder", side_effect=ImportError("no sentence-transformers")
+        ):
+            store = ZvecVectorStore(config=config, embedding_dim=10)
+            await store.connect()
+            assert store._splade_doc_fn is None
+            assert store._splade_query_fn is None
+
+
 class TestZvecVectorStoreUpsert:
     @pytest.mark.asyncio
     async def test_upsert_with_valid_chunks(self, store, mock_collection):
@@ -127,6 +167,26 @@ class TestZvecVectorStoreUpsert:
         count = await store.upsert(chunks)
         assert count == 2
         mock_collection.upsert.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_upsert_calls_optimize(self, store, mock_collection):
+        """optimize() must be called after upsert to build HNSW index."""
+        chunks = [
+            Chunk(text="chunk 1", document_id="doc_1", embedding=[0.1] * 10),
+        ]
+
+        await store.upsert(chunks)
+        mock_collection.optimize.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_upsert_skip_optimize(self, store, mock_collection):
+        """optimize=False skips the HNSW index build for batch callers."""
+        chunks = [
+            Chunk(text="chunk 1", document_id="doc_1", embedding=[0.1] * 10),
+        ]
+
+        await store.upsert(chunks, optimize=False)
+        mock_collection.optimize.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_upsert_empty_list(self, store):
@@ -144,7 +204,6 @@ class TestZvecVectorStoreUpsert:
 class TestZvecVectorStoreReplaceDocument:
     @pytest.mark.asyncio
     async def test_replace_document_with_existing(self, store, mock_collection):
-        # Simulate 2 existing docs returned by query(filter=...)
         existing = [
             _make_doc("old_1", "doc_1", "old text 1"),
             _make_doc("old_2", "doc_1", "old text 2"),
@@ -210,14 +269,15 @@ class TestZvecVectorStoreKeywordSearch:
 
     @pytest.mark.asyncio
     async def test_keyword_search_no_bm25(self, store):
-        store._bm25_fn = None
+        store._bm25_query_fn = None
         results = await store.keyword_search("test", top_k=5)
         assert results == []
 
 
 class TestZvecVectorStoreHybridSearch:
     @pytest.mark.asyncio
-    async def test_hybrid_search_native(self, store, mock_collection):
+    async def test_hybrid_search_native_three_way(self, store, mock_collection):
+        """Native multi-vector search with dense + SPLADE + BM25."""
         mock_collection.query.return_value = [
             _make_doc("chk_1", "doc_1", "hybrid result", score=0.9),
         ]
@@ -226,6 +286,18 @@ class TestZvecVectorStoreHybridSearch:
 
         assert len(results) == 1
         assert results[0].chunk_id == "chk_1"
+
+    @pytest.mark.asyncio
+    async def test_hybrid_search_without_splade(self, store, mock_collection):
+        """Falls back to dense + BM25 when SPLADE is unavailable."""
+        store._splade_query_fn = None
+
+        mock_collection.query.return_value = [
+            _make_doc("chk_1", "doc_1", "text 1", score=0.9),
+        ]
+
+        results = await store.hybrid_search([0.1] * 10, "test query", top_k=5)
+        assert len(results) >= 1
 
     @pytest.mark.asyncio
     async def test_hybrid_search_fallback(self, store, mock_collection, mock_zvec_import):
@@ -258,6 +330,26 @@ class TestZvecVectorStoreDelete:
         count = await store.delete("doc_missing")
         assert count == 0
         mock_collection.delete_by_filter.assert_not_called()
+
+
+class TestZvecSafeFilter:
+    def test_safe_filter_accepts_hex_ids(self):
+        from noid_rag.vectorstore_zvec import _safe_filter
+
+        result = _safe_filter("doc_577a0c0789ba")
+        assert result == "document_id='doc_577a0c0789ba'"
+
+    def test_safe_filter_rejects_single_quotes(self):
+        from noid_rag.vectorstore_zvec import _safe_filter
+
+        with pytest.raises(ValueError, match="Unsafe document_id"):
+            _safe_filter("it's a doc")
+
+    def test_safe_filter_rejects_sql_injection(self):
+        from noid_rag.vectorstore_zvec import _safe_filter
+
+        with pytest.raises(ValueError, match="Unsafe document_id"):
+            _safe_filter("'; DROP TABLE --")
 
 
 class TestZvecVectorStoreDrop:

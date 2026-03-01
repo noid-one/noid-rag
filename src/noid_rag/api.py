@@ -189,6 +189,11 @@ class NoidRag:
 
     # --- Async API ---
 
+    async def astats(self) -> dict[str, Any]:
+        """Async: return vector store statistics."""
+        store = await self._get_store()
+        return await store.stats()
+
     async def areset(self) -> None:
         """Async: drop the vector store."""
         store = await self._get_store()

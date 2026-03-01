@@ -1,7 +1,15 @@
-"""Async zvec vector store with BM25 hybrid search.
+"""Async zvec vector store with SPLADE + BM25 hybrid search.
 
 zvec is a file-based, in-process vector database (no server required).
 All synchronous zvec calls are wrapped with ``asyncio.to_thread()``.
+
+Three-vector hybrid search:
+  - Dense (HNSW) — semantic similarity via embedding model
+  - SPLADE sparse — neural learned sparse embeddings (semantic + lexical)
+  - BM25 sparse — classic keyword matching
+
+After upsert, ``optimize()`` is called to build the HNSW index from the
+flat buffer (without this, all searches fall back to brute-force).
 """
 
 from __future__ import annotations
@@ -9,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import shutil
 from collections import defaultdict
 from pathlib import Path
@@ -21,6 +30,10 @@ logger = logging.getLogger(__name__)
 
 # zvec enforces a maximum topk of 1024 per query call.
 _ZVEC_MAX_TOPK = 1024
+
+# Document IDs produced by _content_id are hex-only; reject anything else
+# before interpolating into a zvec filter string.
+_SAFE_DOC_ID_RE = re.compile(r"^[a-zA-Z0-9_:\-]+$")
 
 
 def _import_zvec() -> Any:
@@ -36,11 +49,62 @@ def _import_zvec() -> Any:
         ) from None
 
 
+def _safe_filter(document_id: str) -> str:
+    """Build a zvec filter string, rejecting unsafe document IDs."""
+    if not _SAFE_DOC_ID_RE.match(document_id):
+        raise ValueError(f"Unsafe document_id for filter: {document_id!r}")
+    return f"document_id='{document_id}'"
+
+
+class _SpladeEncoder:
+    """SPLADE sparse encoder using sentence-transformers v5 SparseEncoder.
+
+    Wraps ``naver/splade-cocondenser-ensembledistil`` and returns sparse dicts
+    compatible with zvec's SPARSE_VECTOR_FP32 fields.
+
+    sentence-transformers v5 changed its model loading — zvec's built-in
+    ``DefaultLocalSparseEmbedding`` falls back to mean pooling and produces
+    wrong output.  This class uses the native ``SparseEncoder`` API directly.
+    """
+
+    _MODEL = "naver/splade-cocondenser-ensembledistil"
+
+    def __init__(self) -> None:
+        self._encoder: Any | None = None
+
+    def _get_encoder(self) -> Any:
+        if self._encoder is None:
+            from sentence_transformers.sparse_encoder import SparseEncoder
+
+            self._encoder = SparseEncoder(self._MODEL, device="cpu")
+        return self._encoder
+
+    def embed(self, text: str) -> dict[int, float]:
+        """Encode a single text into a sparse dict {vocab_index: weight}."""
+        encoder = self._get_encoder()
+        sparse_tensor = encoder.encode([text])[0]  # shape: (vocab_size,)
+
+        if sparse_tensor.is_sparse:
+            coalesced = sparse_tensor.coalesce()
+            indices = coalesced.indices()[0].tolist()
+            values = coalesced.values().tolist()
+            return dict(zip(indices, values))
+
+        # Dense fallback — should not happen with SPLADE; log and return empty.
+        logger.warning(
+            "SPLADE encoder returned a dense tensor; sparse encoding skipped. "
+            "This is unexpected with %s.",
+            self._MODEL,
+        )
+        return {}
+
+
 class ZvecVectorStore:
-    """Async zvec vector store with built-in BM25 for hybrid search.
+    """Async zvec vector store with SPLADE + BM25 hybrid search.
 
     zvec stores data on the local filesystem and requires no external server.
-    Dense and sparse (BM25) vectors are stored together for hybrid retrieval.
+    Dense, SPLADE (neural sparse), and BM25 (lexical sparse) vectors are
+    stored together for three-way hybrid retrieval with RRF fusion.
     """
 
     def __init__(self, config: ZvecConfig | None = None, embedding_dim: int = 384):
@@ -48,7 +112,11 @@ class ZvecVectorStore:
         self.embedding_dim = embedding_dim
         self._zvec: Any | None = None
         self._collection: Any | None = None
-        self._bm25_fn: Any | None = None
+        # Separate encoding_type instances for document indexing vs query search
+        self._bm25_doc_fn: Any | None = None
+        self._bm25_query_fn: Any | None = None
+        self._splade_doc_fn: Any | None = None
+        self._splade_query_fn: Any | None = None
 
     async def connect(self) -> None:
         """Open or create the zvec collection on disk."""
@@ -59,17 +127,32 @@ class ZvecVectorStore:
         data_dir.mkdir(parents=True, exist_ok=True)
         collection_path = data_dir / self.config.collection_name
 
-        # Try to init BM25 before schema creation so we know whether to
-        # include the sparse vector field (zvec fields are not nullable).
+        # Initialise sparse embedding functions with proper encoding_type.
+        # BM25: lexical keyword matching
         try:
-            self._bm25_fn = zvec.BM25EmbeddingFunction()
+            self._bm25_doc_fn = zvec.BM25EmbeddingFunction(encoding_type="document")
+            self._bm25_query_fn = zvec.BM25EmbeddingFunction(encoding_type="query")
         except Exception as exc:
-            logger.warning("BM25 not available (%s); keyword/hybrid search will be limited", exc)
-            self._bm25_fn = None
+            logger.warning("BM25 not available (%s); keyword search will be limited", exc)
+            self._bm25_doc_fn = None
+            self._bm25_query_fn = None
+
+        # SPLADE: neural learned sparse embeddings (semantic + lexical).
+        # Uses our own _SpladeEncoder wrapper around sentence-transformers v5
+        # SparseEncoder because zvec's DefaultLocalSparseEmbedding doesn't work
+        # correctly with sentence-transformers v5 (falls back to mean pooling).
+        try:
+            splade = _SpladeEncoder()
+            splade._get_encoder()  # Trigger model load to fail-fast
+            # Single instance works for both doc and query (SPLADE model handles both)
+            self._splade_doc_fn = splade
+            self._splade_query_fn = splade
+        except Exception as exc:
+            logger.warning("SPLADE not available (%s); hybrid search will use BM25 only", exc)
+            self._splade_doc_fn = None
+            self._splade_query_fn = None
 
         # Build HNSW index params if configured.
-        # COSINE metric is correct for embedding similarity; IP (inner product) is only
-        # equivalent to cosine when vectors are L2-normalised, which is not guaranteed here.
         index_param = None
         if self.config.index_type == "hnsw":
             index_param = zvec.HnswIndexParam(
@@ -86,7 +169,11 @@ class ZvecVectorStore:
                 index_param=index_param,
             ),
         ]
-        if self._bm25_fn is not None:
+        if self._splade_doc_fn is not None:
+            vector_fields.append(
+                zvec.VectorSchema("splade_sparse", zvec.DataType.SPARSE_VECTOR_FP32)
+            )
+        if self._bm25_doc_fn is not None:
             vector_fields.append(
                 zvec.VectorSchema("bm25_sparse", zvec.DataType.SPARSE_VECTOR_FP32)
             )
@@ -122,8 +209,14 @@ class ZvecVectorStore:
             raise RuntimeError("ZvecVectorStore not connected. Call connect() first.")
         return self._zvec
 
-    async def upsert(self, chunks: list[Chunk]) -> int:
-        """Upsert chunks into the collection. Returns count of upserted docs."""
+    async def upsert(self, chunks: list[Chunk], *, optimize: bool = True) -> int:
+        """Upsert chunks into the collection.
+
+        When *optimize* is True (the default), calls ``collection.optimize()``
+        afterwards to build the HNSW index from the flat buffer.  Callers that
+        upsert many documents in a loop should pass ``optimize=False`` and call
+        :meth:`optimize` once at the end.
+        """
         if not chunks:
             return 0
 
@@ -136,11 +229,22 @@ class ZvecVectorStore:
                 raise ValueError(f"Chunk {chunk.id} has no embedding")
 
             vectors: dict[str, Any] = {"embedding": chunk.embedding}
-            if self._bm25_fn is not None:
+
+            # SPLADE sparse vector — wrapped in to_thread to avoid blocking the loop
+            if self._splade_doc_fn is not None:
                 try:
-                    vectors["bm25_sparse"] = self._bm25_fn.embed(chunk.text)
+                    vectors["splade_sparse"] = await asyncio.to_thread(
+                        self._splade_doc_fn.embed, chunk.text
+                    )
                 except Exception:
-                    logger.debug("Failed to encode BM25 sparse vector for chunk %s", chunk.id)
+                    logger.debug("Failed to encode SPLADE sparse for chunk %s", chunk.id)
+
+            # BM25 sparse vector (encoding_type="document")
+            if self._bm25_doc_fn is not None:
+                try:
+                    vectors["bm25_sparse"] = self._bm25_doc_fn.embed(chunk.text)
+                except Exception:
+                    logger.debug("Failed to encode BM25 sparse for chunk %s", chunk.id)
 
             doc = zvec.Doc(
                 id=chunk.id,
@@ -155,37 +259,42 @@ class ZvecVectorStore:
             docs.append(doc)
 
         await asyncio.to_thread(collection.upsert, docs)
+
+        if optimize:
+            await self.optimize()
+
         return len(docs)
 
+    async def optimize(self) -> None:
+        """Build the HNSW index from the flat buffer.
+
+        Without this call, newly inserted vectors remain in a brute-force
+        flat buffer and the configured HNSW index is never used.
+        """
+        collection = self._get_collection()
+        await asyncio.to_thread(collection.optimize)
+
     async def replace_document(
-        self, document_id: str, chunks: list[Chunk]
+        self, document_id: str, chunks: list[Chunk], *, optimize: bool = True
     ) -> tuple[int, int]:
         """Replace all chunks for a document: delete old, then insert new.
-
-        Because zvec's delete_by_filter targets all records matching the filter
-        (including any newly upserted chunks with the same document_id), the
-        only safe ordering is: count + delete first, then insert.
 
         Returns (deleted, inserted).
         """
         collection = self._get_collection()
+        filt = _safe_filter(document_id)
 
-        # Count existing chunks before any mutation
         old_results = await asyncio.to_thread(
             collection.query,
-            filter=f"document_id='{document_id}'",
+            filter=filt,
             topk=_ZVEC_MAX_TOPK,
         )
         deleted = len(old_results) if old_results else 0
 
-        # Delete old chunks first to avoid clobbering the new ones
         if deleted > 0:
-            await asyncio.to_thread(
-                collection.delete_by_filter, f"document_id='{document_id}'"
-            )
+            await asyncio.to_thread(collection.delete_by_filter, filt)
 
-        # Insert new chunks after deletion
-        inserted = await self.upsert(chunks)
+        inserted = await self.upsert(chunks, optimize=optimize)
 
         return deleted, inserted
 
@@ -215,8 +324,8 @@ class ZvecVectorStore:
         top_k: int = 5,
         filter_metadata: dict[str, Any] | None = None,
     ) -> list[SearchResult]:
-        """Sparse BM25 keyword search."""
-        if self._bm25_fn is None:
+        """Sparse BM25 keyword search (encoding_type='query')."""
+        if self._bm25_query_fn is None:
             return []
 
         collection = self._get_collection()
@@ -225,7 +334,7 @@ class ZvecVectorStore:
         fetch_k = top_k * 3 if filter_metadata else top_k
 
         try:
-            sparse_vector = self._bm25_fn.embed(query)
+            sparse_vector = self._bm25_query_fn.embed(query)
             results = await asyncio.to_thread(
                 collection.query,
                 zvec.VectorQuery(field_name="bm25_sparse", vector=sparse_vector),
@@ -245,35 +354,56 @@ class ZvecVectorStore:
         rrf_k: int = 60,
         filter_metadata: dict[str, Any] | None = None,
     ) -> list[SearchResult]:
-        """Hybrid search using dense + sparse with RRF fusion.
+        """Three-way hybrid search: dense + SPLADE + BM25 with RRF fusion.
 
-        Tries zvec's native multi-vector query with RrfReRanker first;
-        falls back to Python-side RRF fusion if unavailable.
+        Builds a list of VectorQuery objects for all available vector fields
+        and uses zvec's native multi-vector query with RrfReRanker.
+        Falls back to Python-side RRF fusion if native multi-vector is unavailable.
         """
         zvec = self._get_zvec()
         collection = self._get_collection()
 
         fetch_k = top_k * 3 if filter_metadata else top_k
 
-        # Try native multi-vector RRF
-        if self._bm25_fn is not None and hasattr(zvec, "RrfReRanker"):
+        # Build vector queries for all available fields
+        vector_queries = [
+            zvec.VectorQuery(field_name="embedding", vector=embedding),
+        ]
+
+        # SPLADE query — wrapped in to_thread to avoid blocking the loop
+        if self._splade_query_fn is not None:
             try:
-                sparse_vector = self._bm25_fn.embed(query)
+                splade_vector = await asyncio.to_thread(
+                    self._splade_query_fn.embed, query
+                )
+                vector_queries.append(
+                    zvec.VectorQuery(field_name="splade_sparse", vector=splade_vector)
+                )
+            except Exception:
+                logger.debug("SPLADE query encoding failed, skipping")
+
+        if self._bm25_query_fn is not None:
+            try:
+                bm25_vector = self._bm25_query_fn.embed(query)
+                vector_queries.append(
+                    zvec.VectorQuery(field_name="bm25_sparse", vector=bm25_vector)
+                )
+            except Exception:
+                logger.debug("BM25 query encoding failed, skipping")
+
+        # Native multi-vector RRF when we have 2+ vector queries
+        if len(vector_queries) >= 2 and hasattr(zvec, "RrfReRanker"):
+            try:
                 results = await asyncio.to_thread(
                     collection.query,
-                    [
-                        zvec.VectorQuery(field_name="embedding", vector=embedding),
-                        zvec.VectorQuery(
-                            field_name="bm25_sparse", vector=sparse_vector
-                        ),
-                    ],
+                    vector_queries,
                     topk=fetch_k,
                     reranker=zvec.RrfReRanker(rank_constant=rrf_k, topn=fetch_k),
                 )
                 return self._results_to_search_results(results, top_k, filter_metadata)
             except Exception:
                 logger.debug(
-                    "Native zvec hybrid search failed, falling back to Python RRF"
+                    "Native zvec multi-vector search failed, falling back to Python RRF"
                 )
 
         # Fallback: run dense + sparse in parallel, merge with Python RRF
@@ -326,18 +456,17 @@ class ZvecVectorStore:
     async def delete(self, document_id: str) -> int:
         """Delete all chunks for a document. Returns count of deleted chunks."""
         collection = self._get_collection()
+        filt = _safe_filter(document_id)
 
         results = await asyncio.to_thread(
             collection.query,
-            filter=f"document_id='{document_id}'",
+            filter=filt,
             topk=_ZVEC_MAX_TOPK,
         )
         count = len(results) if results else 0
 
         if count > 0:
-            await asyncio.to_thread(
-                collection.delete_by_filter, f"document_id='{document_id}'"
-            )
+            await asyncio.to_thread(collection.delete_by_filter, filt)
 
         return count
 
@@ -358,15 +487,9 @@ class ZvecVectorStore:
         """Get collection statistics."""
         collection = self._get_collection()
 
-        # Use native stats for chunk count
         col_stats = await asyncio.to_thread(lambda: collection.stats)
         total_chunks = col_stats.doc_count
 
-        # Count distinct document_ids by querying all docs.
-        # NOTE: zvec enforces a hard cap of _ZVEC_MAX_TOPK (1024) results per query.
-        # For collections with more than 1024 chunks the document count below will be
-        # a lower-bound, not an exact figure.  The chunk count from native stats is
-        # always accurate.
         doc_ids: set[str] = set()
         if total_chunks > 0:
             if total_chunks > _ZVEC_MAX_TOPK:
@@ -455,7 +578,6 @@ class ZvecVectorStore:
         for doc in results:
             sr = self._doc_to_search_result(doc)
 
-            # Post-filter by metadata if needed
             if filter_metadata:
                 if not all(
                     str(sr.metadata.get(k)) == str(v) for k, v in filter_metadata.items()

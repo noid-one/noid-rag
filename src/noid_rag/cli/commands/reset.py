@@ -1,5 +1,7 @@
 """Reset command — drop and recreate the vector store table."""
 
+import asyncio
+
 import typer
 
 from noid_rag.cli.app import app, state
@@ -14,6 +16,8 @@ def reset(
     provider = state.settings.vectorstore.provider
     if provider == "qdrant":
         store_name = state.settings.qdrant.collection_name
+    elif provider == "zvec":
+        store_name = state.settings.zvec.collection_name
     else:
         store_name = state.settings.vectorstore.table_name
 
@@ -22,11 +26,14 @@ def reset(
             f"This will drop store '{store_name}' and all its data. Continue?", abort=True
         )
 
-    try:
+    async def _reset():
         from noid_rag.api import NoidRag
 
-        rag = NoidRag(config=state.settings)
-        rag.reset()
+        async with NoidRag(config=state.settings) as rag:
+            await rag.areset()
+
+    try:
+        asyncio.run(_reset())
         print_success(f"Store '{store_name}' has been reset.")
     except Exception as e:
         print_error(f"Failed to reset: {e}")

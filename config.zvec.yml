@@ -5,6 +5,7 @@
 # Requires: pip install 'noid-rag[zvec]'
 # This installs zvec, sentence-transformers, and dashtext.
 # No server needed — zvec stores data on the local filesystem.
+# Python 3.11-3.12 only (zvec SDK limitation).
 # ──────────────────────────────────────────────────────
 
 parser:

@@ -43,14 +43,16 @@ def eval_command(
         if no_save:
             eval_config.save_results = False
 
-        rag = NoidRag(config=state.settings)
-
-        with console.status("Running evaluation..."):
+        async def _eval():
             from noid_rag.eval import run_evaluation
 
-            summary = asyncio.run(
-                run_evaluation(dataset, eval_config, state.settings, rag, top_k=top_k)
-            )
+            async with NoidRag(config=state.settings) as rag:
+                return await run_evaluation(
+                    dataset, eval_config, state.settings, rag, top_k=top_k
+                )
+
+        with console.status("Running evaluation..."):
+            summary = asyncio.run(_eval())
 
         print_eval_summary(summary, verbose=verbose)
 
